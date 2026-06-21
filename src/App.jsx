@@ -1,14 +1,8 @@
-import { useEffect, useState } from 'react'
-import {
-  getClips,
-  getHealth,
-  getSplits,
-  getStickers,
-  getVoices,
-  probeDuration,
-} from './api/client'
+import { useEffect, useRef, useState } from 'react'
+import { getClips, getHealth, getSplits, getVoices, probeDuration } from './api/client'
 import { useGenerationJob } from './hooks/useGenerationJob'
 import ScriptInput from './components/ScriptInput'
+import ExpressionGuide from './components/ExpressionGuide'
 import VoiceSelect from './components/VoiceSelect'
 import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
@@ -27,35 +21,35 @@ export default function App() {
   const [clip, setClip] = useState('')
   const [background, setBackground] = useState('black') // Feature #2: top bg colour
   const [split, setSplit] = useState('') // Feature #5: top/bottom split
-  const [placements, setPlacements] = useState([]) // Feature #3: stickers
+  const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
+  const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
 
   // --- options loaded from the backend ---
   const [voices, setVoices] = useState([])
   const [clips, setClips] = useState([])
   const [splits, setSplits] = useState([])
-  const [stickerLib, setStickerLib] = useState([])
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
   // Feature #3 timeline: real duration from /api/probe (null = not loaded yet).
   const [timelineDuration, setTimelineDuration] = useState(null)
   const [probing, setProbing] = useState(false)
+  const uploadSeq = useRef(0) // monotonic counter for unique upload keys
 
   const { phase, job, error, isBusy, start, reset } = useGenerationJob()
 
   // Load all backend-driven options once on mount. Defaults come from the
   // registries so the frontend hardcodes no voice/clip/split ids.
   useEffect(() => {
-    Promise.all([getVoices(), getClips(), getSplits(), getStickers(), getHealth()])
-      .then(([voiceData, clipData, splitData, stickerData, healthData]) => {
+    Promise.all([getVoices(), getClips(), getSplits(), getHealth()])
+      .then(([voiceData, clipData, splitData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
         setClip(clipData.default)
         setSplits(splitData.splits)
         setSplit(splitData.default)
-        setStickerLib(stickerData.stickers)
         setHealth(healthData)
       })
       .catch((err) =>
@@ -82,10 +76,35 @@ export default function App() {
       .finally(() => setProbing(false))
   }
 
+  // Feature #3: add uploaded images to session state. Each gets a unique `key`
+  // (used as both the placement reference and the filename sent to the backend),
+  // a human label, the File object (sent on generate), and an object URL preview.
+  // A monotonic ref counter guarantees keys stay unique even across removals.
+  function handleAddFiles(fileList) {
+    const additions = fileList.map((file) => {
+      const safe = file.name.replace(/[^\w.-]+/g, '_')
+      const key = `${uploadSeq.current++}_${safe}`
+      return { key, label: file.name, file, url: URL.createObjectURL(file) }
+    })
+    setUploads((prev) => [...prev, ...additions])
+  }
+  function handleRemoveUpload(key) {
+    setUploads((prev) => {
+      const gone = prev.find((u) => u.key === key)
+      if (gone) URL.revokeObjectURL(gone.url)
+      return prev.filter((u) => u.key !== key)
+    })
+    // Drop any placements that referenced the removed image.
+    setPlacements((prev) => prev.filter((p) => p.image !== key))
+  }
+
   function handleGenerate() {
     // Strip the client-only `id` from placements; backend wants {image,start,end,x,y}.
     const stickers = placements.map(({ id, ...rest }) => rest)
-    start({ text, voice, speed, clip, background, split, stickers, showOutro })
+    // Only send images actually used by a placement.
+    const usedKeys = new Set(placements.map((p) => p.image))
+    const files = uploads.filter((u) => usedKeys.has(u.key))
+    start({ text, voice, speed, clip, background, split, stickers, showOutro, files })
   }
 
   // Prefer the backend's REAL measured duration once available; the textarea's
@@ -121,6 +140,10 @@ export default function App() {
           {/* ---------- left: controls ---------- */}
           <section className="space-y-5 rounded-xl border border-slate-800 bg-slate-900/40 p-5">
             <ScriptInput value={text} onChange={setText} speed={speed} disabled={isBusy} />
+            <ExpressionGuide
+              onInsertSample={(sample) => setText((prev) => (prev.trim() ? `${prev}\n${sample}` : sample))}
+              disabled={isBusy}
+            />
             <VoiceSelect voices={voices} value={voice} onChange={setVoice} disabled={isBusy} />
             <SpeedSlider value={speed} onChange={setSpeed} disabled={isBusy} />
             <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
@@ -130,7 +153,9 @@ export default function App() {
               duration={timelineDuration}
               loading={probing}
               onLoadTimeline={handleLoadTimeline}
-              library={stickerLib}
+              uploads={uploads}
+              onAddFiles={handleAddFiles}
+              onRemoveUpload={handleRemoveUpload}
               placements={placements}
               onChange={setPlacements}
               disabled={isBusy}
