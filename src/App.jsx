@@ -5,6 +5,7 @@ import ScriptInput from './components/ScriptInput'
 import VoiceSelect from './components/VoiceSelect'
 import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
+import BackgroundToggle from './components/BackgroundToggle'
 import ProgressStages from './components/ProgressStages'
 import VideoResult from './components/VideoResult'
 
@@ -14,6 +15,7 @@ export default function App() {
   const [voice, setVoice] = useState('')
   const [speed, setSpeed] = useState(1.2)
   const [clip, setClip] = useState('')
+  const [background, setBackground] = useState('black') // Feature #2: top bg colour
 
   // --- options loaded from the backend ---
   const [voices, setVoices] = useState([])
@@ -45,7 +47,7 @@ export default function App() {
   const canGenerate = text.trim().length > 0 && voice && clip && !isBusy
 
   function handleGenerate() {
-    start({ text, voice, speed, clip })
+    start({ text, voice, speed, clip, background })
   }
 
   // Prefer the backend's REAL measured duration once available; the textarea's
@@ -84,6 +86,7 @@ export default function App() {
             <VoiceSelect voices={voices} value={voice} onChange={setVoice} disabled={isBusy} />
             <SpeedSlider value={speed} onChange={setSpeed} disabled={isBusy} />
             <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
+            <BackgroundToggle value={background} onChange={setBackground} disabled={isBusy} />
 
             <button
               onClick={handleGenerate}

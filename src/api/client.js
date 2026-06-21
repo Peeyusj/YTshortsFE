@@ -37,11 +37,11 @@ export function getClips() {
 
 // Start a pipeline run. Returns { id }. The backend does the work in the
 // background; poll getJob(id) for progress.
-export function createJob({ text, voice, speed, clip }) {
+export function createJob({ text, voice, speed, clip, background }) {
   return request('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice, speed, clip }),
+    body: JSON.stringify({ text, voice, speed, clip, background }),
   })
 }
 
