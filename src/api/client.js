@@ -35,13 +35,55 @@ export function getClips() {
   return request('/api/clips')
 }
 
+export function getSplits() {
+  return request('/api/splits')
+}
+
+export function getStickers() {
+  return request('/api/stickers')
+}
+
+// Absolute URL for a sticker image (the list returns a relative `url`). Use it
+// directly in <img src>.
+export function stickerUrl(sticker) {
+  return `${API_BASE}${sticker.url}`
+}
+
+// Run ONLY the voice stage to measure the real audio duration, so the sticker
+// timeline can be drawn against true seconds. Returns { duration }.
+export function probeDuration({ text, voice, speed }) {
+  return request('/api/probe', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice, speed }),
+  })
+}
+
 // Start a pipeline run. Returns { id }. The backend does the work in the
 // background; poll getJob(id) for progress.
-export function createJob({ text, voice, speed, clip, background }) {
+export function createJob({
+  text,
+  voice,
+  speed,
+  clip,
+  background,
+  split,
+  stickers,
+  showOutro,
+}) {
   return request('/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice, speed, clip, background }),
+    body: JSON.stringify({
+      text,
+      voice,
+      speed,
+      clip,
+      background,
+      split,
+      stickers,
+      show_outro: showOutro,
+    }),
   })
 }
 

@@ -42,6 +42,16 @@ export default function ScriptInput({ value, onChange, speed, disabled }) {
           </span>
         )}
       </div>
+
+      {/* Feature #1: inline emotion tags vary rate/pitch per segment. The tags
+          themselves are never spoken. */}
+      <p className="text-xs text-slate-500">
+        Emotion tags:{' '}
+        <code className="rounded bg-slate-800 px-1">[excited]…[/excited]</code>{' '}
+        <code className="rounded bg-slate-800 px-1">[sad]…[/sad]</code>{' '}
+        <code className="rounded bg-slate-800 px-1">[calm]…[/calm]</code>{' '}
+        wrap part of the script to change the voice for that part.
+      </p>
     </div>
   )
 }

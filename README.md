@@ -34,15 +34,26 @@ The backend allows CORS from `localhost:5173/5174` by default. Override the API 
 
 | Control | Component | Sent as |
 |---------|-----------|---------|
-| Script text | `ScriptInput` | `text` |
-| Voice (male/female) | `VoiceSelect` (options from `/api/voices`) | `voice` |
+| Script text (+ emotion tags) | `ScriptInput` | `text` |
+| Voice (English/Hindi) | `VoiceSelect` (options from `/api/voices`) | `voice` |
 | Speed (1.0–2.0×) | `SpeedSlider` | `speed` |
 | Gameplay clip | `ClipSelect` (options from `/api/clips`) | `clip` |
 | Top background (black/white) | `BackgroundToggle` | `background` |
+| Split (top/bottom) | `SplitSelect` (options from `/api/splits`) | `split` |
+| Stickers (timeline) | `StickerTimeline` (library from `/api/stickers`) | `stickers` |
+| Outro card (2s, default on) | `OutroToggle` | `show_outro` |
 
-Voice and clip dropdowns are **backend-driven** — adding one in `config.py` server-side makes it
+Voice/clip/split dropdowns are **backend-driven** — adding one in `config.py` server-side makes it
 appear here with no frontend change. The background toggle is a fixed two-value control; captions
-auto-pick a contrasting colour server-side, previewed by the `Aa` swatches.
+auto-pick a contrasting colour server-side.
+
+**Emotion tags** — wrap script text in `[excited]…[/excited]`, `[sad]…[/sad]`, or `[calm]…[/calm]`
+to vary the voice for that part (tags are never spoken).
+
+**Sticker timeline** — click *Load timeline* first (calls `POST /api/probe` to measure the real
+narration length), pick a sticker from the library, then drag across the timeline to set its time
+range and choose a position preset (left/center/right × upper/lower). It warns (doesn't block) past
+5 stickers or under 2s each.
 
 ## Structure
 

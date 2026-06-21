@@ -1,11 +1,21 @@
 import { useEffect, useState } from 'react'
-import { getClips, getHealth, getVoices } from './api/client'
+import {
+  getClips,
+  getHealth,
+  getSplits,
+  getStickers,
+  getVoices,
+  probeDuration,
+} from './api/client'
 import { useGenerationJob } from './hooks/useGenerationJob'
 import ScriptInput from './components/ScriptInput'
 import VoiceSelect from './components/VoiceSelect'
 import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
 import BackgroundToggle from './components/BackgroundToggle'
+import SplitSelect from './components/SplitSelect'
+import StickerTimeline from './components/StickerTimeline'
+import OutroToggle from './components/OutroToggle'
 import ProgressStages from './components/ProgressStages'
 import VideoResult from './components/VideoResult'
 
@@ -16,24 +26,36 @@ export default function App() {
   const [speed, setSpeed] = useState(1.2)
   const [clip, setClip] = useState('')
   const [background, setBackground] = useState('black') // Feature #2: top bg colour
+  const [split, setSplit] = useState('') // Feature #5: top/bottom split
+  const [placements, setPlacements] = useState([]) // Feature #3: stickers
+  const [showOutro, setShowOutro] = useState(true) // outro card, on by default
 
   // --- options loaded from the backend ---
   const [voices, setVoices] = useState([])
   const [clips, setClips] = useState([])
+  const [splits, setSplits] = useState([])
+  const [stickerLib, setStickerLib] = useState([])
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
+  // Feature #3 timeline: real duration from /api/probe (null = not loaded yet).
+  const [timelineDuration, setTimelineDuration] = useState(null)
+  const [probing, setProbing] = useState(false)
+
   const { phase, job, error, isBusy, start, reset } = useGenerationJob()
 
-  // Load voices, clips, and health once on mount. Defaults are taken from the
-  // backend's registries so the frontend has no hardcoded voice/clip ids.
+  // Load all backend-driven options once on mount. Defaults come from the
+  // registries so the frontend hardcodes no voice/clip/split ids.
   useEffect(() => {
-    Promise.all([getVoices(), getClips(), getHealth()])
-      .then(([voiceData, clipData, healthData]) => {
+    Promise.all([getVoices(), getClips(), getSplits(), getStickers(), getHealth()])
+      .then(([voiceData, clipData, splitData, stickerData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
         setClip(clipData.default)
+        setSplits(splitData.splits)
+        setSplit(splitData.default)
+        setStickerLib(stickerData.stickers)
         setHealth(healthData)
       })
       .catch((err) =>
@@ -44,10 +66,26 @@ export default function App() {
       )
   }, [])
 
-  const canGenerate = text.trim().length > 0 && voice && clip && !isBusy
+  // The probed duration is only valid for the text/voice/speed it was measured
+  // with — invalidate it (re-lock the timeline) when any of those change.
+  useEffect(() => {
+    setTimelineDuration(null)
+  }, [text, voice, speed])
+
+  const canGenerate = text.trim().length > 0 && voice && clip && split && !isBusy
+
+  function handleLoadTimeline() {
+    setProbing(true)
+    probeDuration({ text, voice, speed })
+      .then((res) => setTimelineDuration(res.duration))
+      .catch((err) => setLoadError(`Couldn't measure narration: ${err.message}`))
+      .finally(() => setProbing(false))
+  }
 
   function handleGenerate() {
-    start({ text, voice, speed, clip, background })
+    // Strip the client-only `id` from placements; backend wants {image,start,end,x,y}.
+    const stickers = placements.map(({ id, ...rest }) => rest)
+    start({ text, voice, speed, clip, background, split, stickers, showOutro })
   }
 
   // Prefer the backend's REAL measured duration once available; the textarea's
@@ -87,6 +125,22 @@ export default function App() {
             <SpeedSlider value={speed} onChange={setSpeed} disabled={isBusy} />
             <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
             <BackgroundToggle value={background} onChange={setBackground} disabled={isBusy} />
+            <SplitSelect splits={splits} value={split} onChange={setSplit} disabled={isBusy} />
+            <StickerTimeline
+              duration={timelineDuration}
+              loading={probing}
+              onLoadTimeline={handleLoadTimeline}
+              library={stickerLib}
+              placements={placements}
+              onChange={setPlacements}
+              disabled={isBusy}
+            />
+            <OutroToggle
+              value={showOutro}
+              onChange={setShowOutro}
+              disabled={isBusy}
+              available={health?.outro}
+            />
 
             <button
               onClick={handleGenerate}
