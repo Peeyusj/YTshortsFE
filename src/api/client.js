@@ -41,11 +41,13 @@ export function getSplits() {
 
 // Run ONLY the voice stage to measure the real audio duration, so the sticker
 // timeline can be drawn against true seconds. Returns { duration }.
-export function probeDuration({ text, voice, speed }) {
+export function probeDuration({ text, voice, speed, voiceDescription }) {
   return request('/api/probe', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice, speed }),
+    // voice_description matters for Parler voices so the probe synthesizes the
+    // SAME audio the full render will (the backend reuses it). Edge ignores it.
+    body: JSON.stringify({ text, voice, speed, voice_description: voiceDescription }),
   })
 }
 
@@ -61,6 +63,7 @@ export function probeDuration({ text, voice, speed }) {
 export function createJob({
   text,
   voice,
+  voiceDescription,
   speed,
   clip,
   background,
@@ -72,7 +75,19 @@ export function createJob({
   const form = new FormData()
   form.append(
     'payload',
-    JSON.stringify({ text, voice, speed, clip, background, split, stickers, show_outro: showOutro }),
+    JSON.stringify({
+      text,
+      voice,
+      // Parler style prompt. Sent for every voice; the backend ignores it for
+      // edge voices and falls back to the voice's default when empty.
+      voice_description: voiceDescription,
+      speed,
+      clip,
+      background,
+      split,
+      stickers,
+      show_outro: showOutro,
+    }),
   )
   for (const f of files) {
     form.append('files', f.file, f.key)

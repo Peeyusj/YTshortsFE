@@ -4,6 +4,7 @@ import { useGenerationJob } from './hooks/useGenerationJob'
 import ScriptInput from './components/ScriptInput'
 import ExpressionGuide from './components/ExpressionGuide'
 import VoiceSelect from './components/VoiceSelect'
+import VoiceDescriptionInput from './components/VoiceDescriptionInput'
 import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
 import BackgroundToggle from './components/BackgroundToggle'
@@ -17,6 +18,7 @@ export default function App() {
   // --- form state ---
   const [text, setText] = useState('')
   const [voice, setVoice] = useState('')
+  const [voiceDescription, setVoiceDescription] = useState('') // Parler style prompt
   const [speed, setSpeed] = useState(1.2)
   const [clip, setClip] = useState('')
   const [background, setBackground] = useState('black') // Feature #2: top bg colour
@@ -60,17 +62,24 @@ export default function App() {
       )
   }, [])
 
-  // The probed duration is only valid for the text/voice/speed it was measured
-  // with — invalidate it (re-lock the timeline) when any of those change.
+  // The selected voice's registry entry. Its `engine` decides whether the Parler
+  // style-prompt box is shown; `default_description` is the placeholder for it.
+  const selectedVoice = voices.find((v) => v.id === voice) ?? null
+  const isParler = selectedVoice?.engine === 'parler'
+
+  // The probed duration is only valid for the text/voice/speed/description it was
+  // measured with — invalidate it (re-lock the timeline) when any of those change.
+  // voiceDescription is included because for Parler a different prompt = different
+  // audio = different duration.
   useEffect(() => {
     setTimelineDuration(null)
-  }, [text, voice, speed])
+  }, [text, voice, speed, voiceDescription])
 
   const canGenerate = text.trim().length > 0 && voice && clip && split && !isBusy
 
   function handleLoadTimeline() {
     setProbing(true)
-    probeDuration({ text, voice, speed })
+    probeDuration({ text, voice, speed, voiceDescription })
       .then((res) => setTimelineDuration(res.duration))
       .catch((err) => setLoadError(`Couldn't measure narration: ${err.message}`))
       .finally(() => setProbing(false))
@@ -104,7 +113,19 @@ export default function App() {
     // Only send images actually used by a placement.
     const usedKeys = new Set(placements.map((p) => p.image))
     const files = uploads.filter((u) => usedKeys.has(u.key))
-    start({ text, voice, speed, clip, background, split, stickers, showOutro, files })
+    // Only send a description for Parler voices; edge ignores it anyway.
+    start({
+      text,
+      voice,
+      voiceDescription: isParler ? voiceDescription : '',
+      speed,
+      clip,
+      background,
+      split,
+      stickers,
+      showOutro,
+      files,
+    })
   }
 
   // Prefer the backend's REAL measured duration once available; the textarea's
@@ -145,6 +166,16 @@ export default function App() {
               disabled={isBusy}
             />
             <VoiceSelect voices={voices} value={voice} onChange={setVoice} disabled={isBusy} />
+            {/* Parler-only: the style prompt appears for AI voices, stays hidden
+                for standard edge_tts voices. */}
+            {isParler && (
+              <VoiceDescriptionInput
+                value={voiceDescription}
+                onChange={setVoiceDescription}
+                placeholder={selectedVoice?.default_description}
+                disabled={isBusy}
+              />
+            )}
             <SpeedSlider value={speed} onChange={setSpeed} disabled={isBusy} />
             <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
             <BackgroundToggle value={background} onChange={setBackground} disabled={isBusy} />
