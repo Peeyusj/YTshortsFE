@@ -1,31 +1,73 @@
-// Sticker timeline (Feature #3, manual placement — images uploaded per session).
+// Canva-like image timeline (Feature #3, manual placement — images uploaded per
+// session).
 //
-// Flow:
-//   1. Upload one or more images from your computer (drag-drop or file picker).
-//      They live only in this browser session (no server library).
-//   2. Click "Load timeline" — App calls POST /api/probe to measure the real
-//      narration length so the timeline is in true seconds.
-//   3. Pick an uploaded image, then click-and-drag across the timeline to set
-//      its start/end range.
-//   4. Click a placed block to set its position (left/center/right ×
-//      upper/lower) or delete it.
+// The idea: "based on the voice, one strip goes across; you see at what timestamp
+// what is being said, and against that you drop an image and choose how long it
+// shows." So this is an editor, not a plain duration bar:
 //
-// Uploads are owned by the parent (App) so it can send the actual File objects
-// on Generate. This component receives them as `uploads` = [{ key, label, url }]
-// and reports placements via onChange as { id, image, start, end, x, y } where
-// `image` is the upload's unique `key`.
-import { useRef, useState } from 'react'
+//   1. Upload images (drag-drop or picker). They live only in this browser
+//      session (no server library).
+//   2. Click "Load timeline" — App calls POST /api/probe, which synthesizes the
+//      narration once and returns its real duration, per-word timings, and a
+//      probe_id. We draw everything against TRUE seconds.
+//   3. The VOICE STRIP shows the audio waveform with each spoken word laid out at
+//      its real timestamp. Play/scrub it to hear exactly what's said when; the
+//      playhead sweeps across.
+//   4. Pick an uploaded image, then drag across the IMAGE TRACK to create a block
+//      spanning the time you want it on screen. Drag the block body to move it,
+//      or drag either edge to trim its in/out — "up to this long this image
+//      shows". Fine-tune with the numeric start/end inputs.
+//   5. Set the block's coarse position (left/center/right × upper/lower) or delete.
+//
+// Uploads are owned by the parent (App) so it can send the actual File objects on
+// Generate. This component receives them as `uploads` = [{ key, label, url }] and
+// reports placements via onChange as { id, image, start, end, x, y } where `image`
+// is the upload's unique `key`. That output shape is UNCHANGED from before, so the
+// backend/stitch contract is untouched — this is purely a richer editing surface.
+import { useEffect, useRef, useState } from 'react'
+import { probeAudioUrl } from '../api/client'
 
 const X_OPTS = ['left', 'center', 'right']
 const Y_OPTS = ['upper', 'lower']
 const MAX_STICKERS = 5 // soft guardrail
-const MIN_SECONDS = 2 // soft guardrail
+const MIN_SECONDS = 2 // soft quality warning threshold
+const MIN_LEN = 0.3 // shortest block you can drag/trim to, in seconds
+
+// Timeline geometry. Everything scales from `pps` (pixels-per-second), which the
+// zoom control tweaks; a wider strip = more room to read words / place precisely.
+const RULER_H = 20
+const WAVE_H = 56
+const TRACK_H = 46
+const DEFAULT_PPS = 70
+const MIN_PPS = 30
+const MAX_PPS = 160
+const WAVE_BARS = 900 // waveform resolution (peak buckets), independent of zoom
 
 let _idCounter = 0
 const nextId = () => `p${_idCounter++}`
 
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v))
+const round2 = (v) => +v.toFixed(2)
+
+// A "nice" ruler step (seconds) so tick labels stay ~>=48px apart at this zoom.
+function niceStep(pps) {
+  for (const s of [0.5, 1, 2, 5, 10, 15, 30, 60]) if (s * pps >= 48) return s
+  return 60
+}
+// mm:ss for the transport clock; short 's' labels for the ruler.
+const fmtClock = (s) => {
+  const t = Math.max(0, s || 0)
+  const m = Math.floor(t / 60)
+  const sec = Math.floor(t % 60)
+  return `${m}:${String(sec).padStart(2, '0')}`
+}
+const fmtTick = (t) =>
+  t >= 60 ? fmtClock(t) : Number.isInteger(t) ? `${t}s` : `${t.toFixed(1)}s`
+
 export default function StickerTimeline({
   duration,
+  words = [],
+  probeId,
   loading,
   onLoadTimeline,
   uploads,
@@ -35,47 +77,155 @@ export default function StickerTimeline({
   onChange,
   disabled,
 }) {
-  const trackRef = useRef(null)
   const fileInputRef = useRef(null)
+  const contentRef = useRef(null) // fixed-width inner; the seconds<->pixels frame
+  const imgTrackRef = useRef(null) // pointer-capture surface for block editing
+  const audioRef = useRef(null)
+  const waveCanvasRef = useRef(null)
+  const drag = useRef(null) // active block interaction (see beginX handlers)
+  const scrubbing = useRef(false)
+
   const [selectedKey, setSelectedKey] = useState(null) // upload chosen to place
   const [selectedId, setSelectedId] = useState(null) // placed block being edited
-  const [draft, setDraft] = useState(null) // { start, end } while dragging
+  const [draft, setDraft] = useState(null) // { start, end } while dragging a new block
   const [dragOver, setDragOver] = useState(false)
+  const [pps, setPps] = useState(DEFAULT_PPS)
+  const [peaks, setPeaks] = useState(null) // normalized waveform samples [0..1]
+  const [playing, setPlaying] = useState(false)
+  const [cursor, setCursor] = useState(0) // playhead position in seconds
 
+  const secToPx = (s) => s * pps
+  const totalW = duration ? Math.max(secToPx(duration), 320) : 0
+  const audioSrc = probeId ? probeAudioUrl(probeId) : null
+
+  // ---- upload handling (unchanged behaviour) --------------------------------
   function handleFiles(fileList) {
     const imgs = Array.from(fileList).filter((f) => f.type.startsWith('image/'))
     if (imgs.length) onAddFiles(imgs)
   }
 
-  // pixel x -> seconds, clamped to [0, duration]
+  // ---- pixels <-> seconds ----------------------------------------------------
+  // Measured off the fixed-width inner, whose left edge tracks horizontal scroll
+  // automatically (getBoundingClientRect is viewport-relative), so the math holds
+  // even when the timeline is scrolled.
   function pxToSec(clientX) {
-    const rect = trackRef.current.getBoundingClientRect()
-    const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width))
-    return frac * duration
-  }
-  function onPointerDown(e) {
-    if (disabled || !selectedKey) return
-    e.target.setPointerCapture?.(e.pointerId)
-    setDraft({ start: pxToSec(e.clientX), end: pxToSec(e.clientX) })
-  }
-  function onPointerMove(e) {
-    if (!draft) return
-    setDraft((d) => ({ ...d, end: pxToSec(e.clientX) }))
-  }
-  function onPointerUp() {
-    if (!draft) return
-    const a = Math.min(draft.start, draft.end)
-    const b = Math.max(draft.start, draft.end)
-    setDraft(null)
-    if (b - a < 0.3) return // ignore stray clicks
-    const id = nextId()
-    onChange([
-      ...placements,
-      { id, image: selectedKey, start: +a.toFixed(2), end: +b.toFixed(2), x: 'center', y: 'upper' },
-    ])
-    setSelectedId(id)
+    const rect = contentRef.current.getBoundingClientRect()
+    return clamp((clientX - rect.left) / pps, 0, duration)
   }
 
+  // ---- audio: playback + playhead -------------------------------------------
+  // New narration (probeId change) => stop and rewind.
+  useEffect(() => {
+    setPlaying(false)
+    setCursor(0)
+  }, [probeId])
+
+  // Smoothly follow the audio while it plays (timeupdate is too coarse for a
+  // playhead). Runs only while `playing`, so it costs nothing when paused.
+  useEffect(() => {
+    if (!playing) return
+    let raf
+    const tick = () => {
+      const a = audioRef.current
+      if (a) setCursor(a.currentTime)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
+
+  function togglePlay() {
+    const a = audioRef.current
+    if (!a) return
+    if (a.paused) {
+      a.play().then(() => setPlaying(true)).catch(() => setPlaying(false))
+    } else {
+      a.pause()
+      setPlaying(false)
+    }
+  }
+  function seekTo(sec) {
+    const s = clamp(sec, 0, duration || 0)
+    const a = audioRef.current
+    if (a) a.currentTime = s
+    setCursor(s)
+  }
+
+  // Scrub the playhead by dragging anywhere on the voice strip (ruler/waveform).
+  function scrubDown(e) {
+    if (!duration) return
+    scrubbing.current = true
+    seekTo(pxToSec(e.clientX))
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+  }
+  function scrubMove(e) {
+    if (scrubbing.current) seekTo(pxToSec(e.clientX))
+  }
+  function scrubUp() {
+    scrubbing.current = false
+  }
+
+  // ---- waveform: fetch the probe audio, decode, reduce to peak buckets -------
+  useEffect(() => {
+    if (!probeId || !duration) {
+      setPeaks(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const resp = await fetch(probeAudioUrl(probeId))
+        const buf = await resp.arrayBuffer()
+        const AC = window.AudioContext || window.webkitAudioContext
+        const ctx = new AC()
+        const audioBuf = await ctx.decodeAudioData(buf)
+        ctx.close()
+        if (cancelled) return
+        const raw = audioBuf.getChannelData(0)
+        const block = Math.max(1, Math.floor(raw.length / WAVE_BARS))
+        const out = new Array(WAVE_BARS)
+        let globalMax = 0
+        for (let i = 0; i < WAVE_BARS; i++) {
+          let max = 0
+          const s = i * block
+          const e = Math.min(raw.length, s + block)
+          for (let j = s; j < e; j++) {
+            const v = Math.abs(raw[j])
+            if (v > max) max = v
+          }
+          out[i] = max
+          if (max > globalMax) globalMax = max
+        }
+        const norm = globalMax || 1
+        setPeaks(out.map((v) => v / norm))
+      } catch {
+        if (!cancelled) setPeaks(null) // playback still works without the waveform
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [probeId, duration])
+
+  // Paint the waveform whenever peaks or the strip width (zoom) change.
+  useEffect(() => {
+    const c = waveCanvasRef.current
+    if (!c) return
+    const ctx = c.getContext('2d')
+    ctx.clearRect(0, 0, c.width, c.height)
+    if (!peaks || !peaks.length) return
+    const w = c.width
+    const h = c.height
+    const mid = h / 2
+    const bw = w / peaks.length
+    ctx.fillStyle = 'rgba(129, 140, 248, 0.55)' // indigo-400
+    for (let i = 0; i < peaks.length; i++) {
+      const bh = Math.max(1, peaks[i] * h * 0.92)
+      ctx.fillRect(i * bw, mid - bh / 2, Math.max(1, bw * 0.8), bh)
+    }
+  }, [peaks, totalW])
+
+  // ---- image-block editing ---------------------------------------------------
   function updatePlacement(id, patch) {
     onChange(placements.map((p) => (p.id === id ? { ...p, ...patch } : p)))
   }
@@ -84,16 +234,85 @@ export default function StickerTimeline({
     if (selectedId === id) setSelectedId(null)
   }
 
+  // Empty-track pointer down with an image selected => start drawing a new block.
+  function trackDown(e) {
+    if (disabled || !selectedKey || !duration) return
+    const s = pxToSec(e.clientX)
+    drag.current = { type: 'create' }
+    setDraft({ start: s, end: s })
+    imgTrackRef.current.setPointerCapture(e.pointerId)
+  }
+  // Pointer down on a block body => select + start moving it (keep its length).
+  function beginMove(e, p) {
+    e.stopPropagation()
+    if (disabled) return
+    setSelectedId(p.id)
+    drag.current = {
+      type: 'move',
+      id: p.id,
+      grabSec: pxToSec(e.clientX),
+      origStart: p.start,
+      origEnd: p.end,
+    }
+    imgTrackRef.current.setPointerCapture(e.pointerId)
+  }
+  // Pointer down on an edge handle => trim that side (change in/out point).
+  function beginResize(e, p, side) {
+    e.stopPropagation()
+    if (disabled) return
+    setSelectedId(p.id)
+    drag.current = { type: side === 'l' ? 'resize-l' : 'resize-r', id: p.id, origStart: p.start, origEnd: p.end }
+    imgTrackRef.current.setPointerCapture(e.pointerId)
+  }
+  function trackMove(e) {
+    const d = drag.current
+    if (!d) return
+    const s = pxToSec(e.clientX)
+    if (d.type === 'create') {
+      setDraft((prev) => ({ ...prev, end: s }))
+    } else if (d.type === 'move') {
+      const len = d.origEnd - d.origStart
+      const ns = clamp(d.origStart + (s - d.grabSec), 0, duration - len)
+      updatePlacement(d.id, { start: round2(ns), end: round2(ns + len) })
+    } else if (d.type === 'resize-l') {
+      updatePlacement(d.id, { start: round2(clamp(s, 0, d.origEnd - MIN_LEN)) })
+    } else if (d.type === 'resize-r') {
+      updatePlacement(d.id, { end: round2(clamp(s, d.origStart + MIN_LEN, duration)) })
+    }
+  }
+  function trackUp() {
+    const d = drag.current
+    drag.current = null
+    if (d?.type === 'create' && draft) {
+      const a = Math.min(draft.start, draft.end)
+      const b = Math.max(draft.start, draft.end)
+      if (b - a >= MIN_LEN) {
+        const id = nextId()
+        onChange([
+          ...placements,
+          { id, image: selectedKey, start: round2(a), end: round2(b), x: 'center', y: 'upper' },
+        ])
+        setSelectedId(id)
+      }
+    }
+    setDraft(null)
+  }
+
   const labelFor = (key) => uploads.find((u) => u.key === key)?.label ?? key
   const selected = placements.find((p) => p.id === selectedId) || null
   const tooMany = placements.length > MAX_STICKERS
   const tooShort = placements.filter((p) => p.end - p.start < MIN_SECONDS)
-  const pct = (sec) => `${(sec / duration) * 100}%`
+  const ticks = []
+  if (duration) {
+    const step = niceStep(pps)
+    for (let t = 0; t <= duration + 1e-6; t += step) ticks.push(+t.toFixed(3))
+  }
 
   return (
     <div className="space-y-3">
       <label className="block text-sm font-medium text-slate-200">
-        Stickers {duration ? <span className="text-slate-500">({duration.toFixed(1)}s)</span> : null}
+        Image timeline{' '}
+        {duration ? <span className="text-slate-500">({duration.toFixed(1)}s)</span> : null}
       </label>
 
       {/* --- upload dropzone --- */}
@@ -111,7 +330,9 @@ export default function StickerTimeline({
         onClick={() => !disabled && fileInputRef.current?.click()}
         className={
           'cursor-pointer rounded-lg border border-dashed p-3 text-center text-xs ' +
-          (dragOver ? 'border-indigo-400 bg-indigo-500/10 text-indigo-200' : 'border-slate-700 text-slate-400 hover:border-slate-500')
+          (dragOver
+            ? 'border-indigo-400 bg-indigo-500/10 text-indigo-200'
+            : 'border-slate-700 text-slate-400 hover:border-slate-500')
         }
       >
         Drag & drop images here, or click to choose files
@@ -163,7 +384,7 @@ export default function StickerTimeline({
         </div>
       )}
 
-      {/* --- timeline locked until we know the real duration --- */}
+      {/* --- timeline is locked until we know the real duration --- */}
       {!duration ? (
         <div className="space-y-1">
           <button
@@ -176,67 +397,186 @@ export default function StickerTimeline({
             {loading ? 'Measuring narration…' : 'Load timeline (generate voice preview)'}
           </button>
           <p className="text-xs text-slate-500">
-            We synthesize the voice once to get the exact duration, then you can place stickers
-            against real seconds.
+            We synthesize the voice once to get the exact timing, then you can see what's said
+            when and place images against real seconds.
           </p>
         </div>
       ) : (
         <>
-          <p className="text-xs text-slate-500">
-            {selectedKey
-              ? `Drag across the timeline to place "${labelFor(selectedKey)}".`
-              : uploads.length
-                ? 'Pick an uploaded image above, then drag across the timeline.'
-                : 'Upload an image first.'}
-          </p>
-
-          {/* the timeline track */}
-          <div
-            ref={trackRef}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            className={
-              'relative h-14 w-full select-none rounded-lg border border-slate-700 bg-slate-900 ' +
-              (selectedKey && !disabled ? 'cursor-crosshair' : 'cursor-not-allowed')
-            }
-          >
-            {placements.map((p) => (
-              <div
-                key={p.id}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  setSelectedId(p.id)
-                }}
-                style={{ left: pct(p.start), width: pct(p.end - p.start) }}
-                className={
-                  'absolute top-1 bottom-1 flex items-center justify-center overflow-hidden rounded ' +
-                  'px-1 text-[10px] text-white ' +
-                  (p.id === selectedId ? 'bg-indigo-500 ring-2 ring-white/60' : 'bg-indigo-600/80')
-                }
-                title={`${labelFor(p.image)} ${p.start}–${p.end}s @ ${p.x}/${p.y}`}
+          {/* transport + hint + zoom */}
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={togglePlay}
+              disabled={!audioSrc}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-600 text-white
+                         hover:bg-indigo-500 disabled:opacity-40"
+              title={playing ? 'Pause' : 'Play narration'}
+            >
+              {playing ? '❚❚' : '▶'}
+            </button>
+            <span className="font-mono text-xs text-slate-400">
+              {fmtClock(cursor)} / {fmtClock(duration)}
+            </span>
+            <span className="flex-1 text-right text-[11px] text-slate-500">
+              {selectedKey
+                ? `Drag across the track to place "${labelFor(selectedKey)}".`
+                : uploads.length
+                  ? 'Pick an image above, then drag across the track.'
+                  : 'Upload an image to start placing.'}
+            </span>
+            <div className="flex items-center gap-1 text-slate-400">
+              <button
+                type="button"
+                onClick={() => setPps((p) => clamp(Math.round(p / 1.3), MIN_PPS, MAX_PPS))}
+                className="h-6 w-6 rounded border border-slate-700 text-xs hover:bg-slate-800"
+                title="Zoom out"
               >
-                {labelFor(p.image)}
-              </div>
-            ))}
-            {draft && (
-              <div
-                style={{
-                  left: pct(Math.min(draft.start, draft.end)),
-                  width: pct(Math.abs(draft.end - draft.start)),
-                }}
-                className="absolute top-1 bottom-1 rounded bg-emerald-500/50"
-              />
-            )}
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setPps((p) => clamp(Math.round(p * 1.3), MIN_PPS, MAX_PPS))}
+                className="h-6 w-6 rounded border border-slate-700 text-xs hover:bg-slate-800"
+                title="Zoom in"
+              >
+                +
+              </button>
+            </div>
           </div>
 
-          {/* editor for the selected placement */}
+          {/* the hidden audio element that actually plays the narration */}
+          {audioSrc && (
+            <audio
+              ref={audioRef}
+              src={audioSrc}
+              preload="auto"
+              onEnded={() => setPlaying(false)}
+              className="hidden"
+            />
+          )}
+
+          {/* horizontally-scrollable timeline */}
+          <div className="overflow-x-auto rounded-lg border border-slate-700 bg-slate-900">
+            <div ref={contentRef} style={{ width: totalW }} className="relative select-none">
+              {/* voice strip: ruler + waveform + words; drag it to scrub */}
+              <div
+                onPointerDown={scrubDown}
+                onPointerMove={scrubMove}
+                onPointerUp={scrubUp}
+                className="cursor-pointer"
+              >
+                {/* ruler */}
+                <div className="relative border-b border-slate-800" style={{ height: RULER_H }}>
+                  {ticks.map((t) => (
+                    <div
+                      key={t}
+                      className="absolute top-0 h-full border-l border-slate-700/70"
+                      style={{ left: secToPx(t) }}
+                    >
+                      <span className="ml-1 text-[9px] text-slate-500">{fmtTick(t)}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* waveform + word chips */}
+                <div className="relative bg-slate-900/60" style={{ height: WAVE_H }}>
+                  <canvas
+                    ref={waveCanvasRef}
+                    width={totalW}
+                    height={WAVE_H}
+                    className="absolute inset-0 h-full w-full"
+                  />
+                  {words.map((w, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      title={`${w.word} · ${w.start.toFixed(2)}–${w.end.toFixed(2)}s`}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        seekTo(w.start)
+                      }}
+                      style={{
+                        left: secToPx(w.start),
+                        width: Math.max(secToPx(w.end - w.start), 5),
+                      }}
+                      className="absolute bottom-0 truncate rounded-t bg-slate-800/70 px-0.5 text-[9px]
+                                 leading-4 text-slate-300 hover:bg-slate-700 hover:text-white"
+                    >
+                      {w.word}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* image track: create / move / trim blocks here */}
+              <div
+                ref={imgTrackRef}
+                onPointerDown={trackDown}
+                onPointerMove={trackMove}
+                onPointerUp={trackUp}
+                className={
+                  'relative border-t border-slate-800 bg-slate-950/40 ' +
+                  (selectedKey && !disabled ? 'cursor-crosshair' : '')
+                }
+                style={{ height: TRACK_H }}
+              >
+                {placements.map((p) => {
+                  const active = p.id === selectedId
+                  return (
+                    <div
+                      key={p.id}
+                      onPointerDown={(e) => beginMove(e, p)}
+                      style={{ left: secToPx(p.start), width: Math.max(secToPx(p.end - p.start), 6) }}
+                      className={
+                        'absolute top-1 bottom-1 flex items-center overflow-hidden rounded ' +
+                        'text-[10px] text-white ' +
+                        (active ? 'bg-indigo-500 ring-2 ring-white/70' : 'bg-indigo-600/85 hover:bg-indigo-600') +
+                        (disabled ? '' : ' cursor-grab active:cursor-grabbing')
+                      }
+                      title={`${labelFor(p.image)} · ${p.start}–${p.end}s @ ${p.y}-${p.x}`}
+                    >
+                      {/* left trim handle */}
+                      <div
+                        onPointerDown={(e) => beginResize(e, p, 'l')}
+                        className="absolute left-0 top-0 h-full w-1.5 cursor-ew-resize bg-white/30 hover:bg-white/60"
+                      />
+                      <span className="pointer-events-none w-full truncate px-2">{labelFor(p.image)}</span>
+                      {/* right trim handle */}
+                      <div
+                        onPointerDown={(e) => beginResize(e, p, 'r')}
+                        className="absolute right-0 top-0 h-full w-1.5 cursor-ew-resize bg-white/30 hover:bg-white/60"
+                      />
+                    </div>
+                  )
+                })}
+                {draft && (
+                  <div
+                    style={{
+                      left: secToPx(Math.min(draft.start, draft.end)),
+                      width: secToPx(Math.abs(draft.end - draft.start)),
+                    }}
+                    className="absolute top-1 bottom-1 rounded bg-emerald-500/50"
+                  />
+                )}
+              </div>
+
+              {/* playhead spanning the whole stack (non-interactive) */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 z-10 w-px bg-rose-400"
+                style={{ left: secToPx(cursor) }}
+              >
+                <div className="absolute -left-[3px] -top-0.5 h-1.5 w-1.5 rounded-full bg-rose-400" />
+              </div>
+            </div>
+          </div>
+
+          {/* editor for the selected block: timing, position, delete */}
           {selected && (
             <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
               <div className="flex items-center justify-between text-xs text-slate-300">
-                <span className="font-medium">
-                  {labelFor(selected.image)} · {selected.start}–{selected.end}s
-                </span>
+                <span className="font-medium">{labelFor(selected.image)}</span>
                 <button
                   type="button"
                   onClick={() => removePlacement(selected.id)}
@@ -244,6 +584,41 @@ export default function StickerTimeline({
                 >
                   Delete
                 </button>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-slate-400">
+                <label className="flex items-center gap-1">
+                  start
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={0}
+                    max={selected.end - MIN_LEN}
+                    value={selected.start}
+                    onChange={(e) =>
+                      updatePlacement(selected.id, {
+                        start: round2(clamp(+e.target.value, 0, selected.end - MIN_LEN)),
+                      })
+                    }
+                    className="w-16 rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-slate-200"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  end
+                  <input
+                    type="number"
+                    step="0.1"
+                    min={selected.start + MIN_LEN}
+                    max={duration}
+                    value={selected.end}
+                    onChange={(e) =>
+                      updatePlacement(selected.id, {
+                        end: round2(clamp(+e.target.value, selected.start + MIN_LEN, duration)),
+                      })
+                    }
+                    className="w-16 rounded border border-slate-700 bg-slate-800 px-1 py-0.5 text-slate-200"
+                  />
+                </label>
+                <span className="text-slate-500">= {(selected.end - selected.start).toFixed(1)}s on screen</span>
               </div>
               <div className="grid grid-cols-3 gap-1">
                 {Y_OPTS.map((y) =>
@@ -273,9 +648,11 @@ export default function StickerTimeline({
       {/* --- soft quality warnings (don't block generation) --- */}
       {(tooMany || tooShort.length > 0) && (
         <div className="space-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
-          {tooMany && <div>⚠ {placements.length} stickers — consider keeping it ≤ {MAX_STICKERS} for a clean look.</div>}
+          {tooMany && (
+            <div>⚠ {placements.length} images — consider keeping it ≤ {MAX_STICKERS} for a clean look.</div>
+          )}
           {tooShort.length > 0 && (
-            <div>⚠ {tooShort.length} sticker(s) shorter than {MIN_SECONDS}s may flash by too fast.</div>
+            <div>⚠ {tooShort.length} image(s) shorter than {MIN_SECONDS}s may flash by too fast.</div>
           )}
         </div>
       )}

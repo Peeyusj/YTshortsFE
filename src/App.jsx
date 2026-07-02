@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { getClips, getHealth, getSplits, getVoices, probeDuration } from './api/client'
+import { getClips, getHealth, getMusic, getSplits, getVoices, probeDuration } from './api/client'
 import { useGenerationJob } from './hooks/useGenerationJob'
 import ScriptInput from './components/ScriptInput'
 import ExpressionGuide from './components/ExpressionGuide'
@@ -9,6 +9,7 @@ import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
 import BackgroundToggle from './components/BackgroundToggle'
 import SplitSelect from './components/SplitSelect'
+import MusicSelect from './components/MusicSelect'
 import StickerTimeline from './components/StickerTimeline'
 import OutroToggle from './components/OutroToggle'
 import ProgressStages from './components/ProgressStages'
@@ -23,6 +24,8 @@ export default function App() {
   const [clip, setClip] = useState('')
   const [background, setBackground] = useState('black') // Feature #2: top bg colour
   const [split, setSplit] = useState('') // Feature #5: top/bottom split
+  const [music, setMusic] = useState('') // background music id ('' = none)
+  const [musicVolume, setMusicVolume] = useState(0.18) // 0..1, under the voice
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
@@ -31,11 +34,16 @@ export default function App() {
   const [voices, setVoices] = useState([])
   const [clips, setClips] = useState([])
   const [splits, setSplits] = useState([])
+  const [musicOptions, setMusicOptions] = useState([])
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
-  // Feature #3 timeline: real duration from /api/probe (null = not loaded yet).
+  // Feature #3 timeline: real narration from /api/probe (null = not loaded yet).
+  // duration scales the timeline; words drive the voice strip (what's spoken
+  // when); probeId fetches the narration audio for playback + waveform.
   const [timelineDuration, setTimelineDuration] = useState(null)
+  const [timelineWords, setTimelineWords] = useState([])
+  const [probeId, setProbeId] = useState(null)
   const [probing, setProbing] = useState(false)
   const uploadSeq = useRef(0) // monotonic counter for unique upload keys
 
@@ -44,14 +52,18 @@ export default function App() {
   // Load all backend-driven options once on mount. Defaults come from the
   // registries so the frontend hardcodes no voice/clip/split ids.
   useEffect(() => {
-    Promise.all([getVoices(), getClips(), getSplits(), getHealth()])
-      .then(([voiceData, clipData, splitData, healthData]) => {
+    Promise.all([getVoices(), getClips(), getSplits(), getMusic(), getHealth()])
+      .then(([voiceData, clipData, splitData, musicData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
         setClip(clipData.default)
         setSplits(splitData.splits)
         setSplit(splitData.default)
+        setMusicOptions(musicData.music)
+        // default is null (no music) -> '' keeps the "None" option selected.
+        setMusic(musicData.default ?? '')
+        setMusicVolume(musicData.default_volume ?? 0.18)
         setHealth(healthData)
       })
       .catch((err) =>
@@ -73,6 +85,8 @@ export default function App() {
   // audio = different duration.
   useEffect(() => {
     setTimelineDuration(null)
+    setTimelineWords([])
+    setProbeId(null)
   }, [text, voice, speed, voiceDescription])
 
   const canGenerate = text.trim().length > 0 && voice && clip && split && !isBusy
@@ -80,7 +94,11 @@ export default function App() {
   function handleLoadTimeline() {
     setProbing(true)
     probeDuration({ text, voice, speed, voiceDescription })
-      .then((res) => setTimelineDuration(res.duration))
+      .then((res) => {
+        setTimelineDuration(res.duration)
+        setTimelineWords(res.words ?? [])
+        setProbeId(res.probe_id ?? null)
+      })
       .catch((err) => setLoadError(`Couldn't measure narration: ${err.message}`))
       .finally(() => setProbing(false))
   }
@@ -124,6 +142,8 @@ export default function App() {
       split,
       stickers,
       showOutro,
+      music,
+      musicVolume,
       files,
     })
   }
@@ -180,8 +200,18 @@ export default function App() {
             <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
             <BackgroundToggle value={background} onChange={setBackground} disabled={isBusy} />
             <SplitSelect splits={splits} value={split} onChange={setSplit} disabled={isBusy} />
+            <MusicSelect
+              music={musicOptions}
+              value={music}
+              onChange={setMusic}
+              volume={musicVolume}
+              onVolumeChange={setMusicVolume}
+              disabled={isBusy}
+            />
             <StickerTimeline
               duration={timelineDuration}
+              words={timelineWords}
+              probeId={probeId}
               loading={probing}
               onLoadTimeline={handleLoadTimeline}
               uploads={uploads}

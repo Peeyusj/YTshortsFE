@@ -39,8 +39,18 @@ export function getSplits() {
   return request('/api/splits')
 }
 
-// Run ONLY the voice stage to measure the real audio duration, so the sticker
-// timeline can be drawn against true seconds. Returns { duration }.
+// Drives the background-music dropdown. Returns
+//   { music: [{ id, label, path, artist, mood, description }], default, default_volume }
+// `default` is null (no music) and `default_volume` seeds the volume slider.
+export function getMusic() {
+  return request('/api/music')
+}
+
+// Run ONLY the voice stage to measure the real narration, so the Canva-like
+// timeline can be drawn against true seconds. Returns
+//   { duration, words: [{ word, start, end }], probe_id }
+// `words` powers the voice strip (what's spoken when); `probe_id` is the handle
+// for probeAudioUrl() below (playback + waveform).
 export function probeDuration({ text, voice, speed, voiceDescription }) {
   return request('/api/probe', {
     method: 'POST',
@@ -49,6 +59,13 @@ export function probeDuration({ text, voice, speed, voiceDescription }) {
     // SAME audio the full render will (the backend reuses it). Edge ignores it.
     body: JSON.stringify({ text, voice, speed, voice_description: voiceDescription }),
   })
+}
+
+// Direct URL to a probe's synthesized narration mp3 (not fetched as JSON). Drop
+// it into an <audio src> for scrubbable playback, or fetch()+decodeAudioData it
+// to draw the waveform. Backend serves it from the throwaway probe dir.
+export function probeAudioUrl(probeId) {
+  return `${API_BASE}/api/probe/${probeId}/audio`
 }
 
 // Start a pipeline run. Returns { id }. The backend does the work in the
@@ -70,6 +87,8 @@ export function createJob({
   split,
   stickers,
   showOutro,
+  music,
+  musicVolume,
   files = [],
 }) {
   const form = new FormData()
@@ -87,6 +106,10 @@ export function createJob({
       split,
       stickers,
       show_outro: showOutro,
+      // Background-music registry id (null = no music) + how loud it sits under
+      // the narration. The backend maps the id to a file and does the mix.
+      music: music || null,
+      music_volume: musicVolume,
     }),
   )
   for (const f of files) {
