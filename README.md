@@ -6,6 +6,11 @@ Web UI for the [Shorts Pipeline](../YTshortsAnimation) — turn a text script in
 The UI is a thin client: it collects options, POSTs a job to the FastAPI backend, then polls
 for per-stage progress and finally shows/downloads the rendered `final.mp4`.
 
+> 📚 **Learning the frontend?** See **[`docs/FRONTEND.md`](docs/FRONTEND.md)** (architecture, state model,
+> API client, polling), **[`docs/COMPONENTS.md`](docs/COMPONENTS.md)** (all 12 components), and
+> **[`docs/STICKER-TIMELINE.md`](docs/STICKER-TIMELINE.md)** (the timeline editor deep dive). For the
+> backend and the full system, start at [`../YTshortsAnimation/docs/00-START-HERE.md`](../YTshortsAnimation/docs/00-START-HERE.md).
+
 ## Prerequisites
 
 The backend must be running first (see [`YTshortsAnimation`](../YTshortsAnimation) → *Backend*):
