@@ -46,6 +46,30 @@ export function getMusic() {
   return request('/api/music')
 }
 
+// Drives the per-sticker sound-effect dropdown. Returns
+//   { sounds: [{ id, label, path, description }] }
+export function getSounds() {
+  return request('/api/sounds')
+}
+
+// Direct URL to a sound effect's raw audio file, for the preview play button.
+export function soundAudioUrl(soundId) {
+  return `${API_BASE}/api/sounds/${soundId}/audio`
+}
+
+// Drives the caption font/colour preset picker. Returns
+//   { styles: [{ id, label, font, font_size, bold, primary, outline, description }], default }
+export function getCaptionStyles() {
+  return request('/api/caption-styles')
+}
+
+// Direct URL to a voice's cached short demo sample, for the voice preview
+// button. First request per voice synthesizes (and caches); later ones are
+// instant.
+export function voiceSampleUrl(voiceId) {
+  return `${API_BASE}/api/voices/${voiceId}/sample`
+}
+
 // Run ONLY the voice stage to measure the real narration, so the Canva-like
 // timeline can be drawn against true seconds. Returns
 //   { duration, words: [{ word, start, end }], probe_id }
@@ -89,6 +113,9 @@ export function createJob({
   showOutro,
   music,
   musicVolume,
+  captionStyle,
+  introVideo = null,
+  outroVideo = null,
   files = [],
 }) {
   const form = new FormData()
@@ -104,12 +131,20 @@ export function createJob({
       clip,
       background,
       split,
+      // Each placement already carries full_width/animation/animation_duration/
+      // sound_id alongside the original image/start/end/x/y — no transform needed.
       stickers,
       show_outro: showOutro,
       // Background-music registry id (null = no music) + how loud it sits under
       // the narration. The backend maps the id to a file and does the mix.
       music: music || null,
       music_volume: musicVolume,
+      // Caption style preset registry id (font/size/weight/colours).
+      caption_style: captionStyle,
+      // Intro/outro video wrap filenames (the clip files ride in `files` below,
+      // keyed by these same names). null = not used.
+      intro_video: introVideo,
+      outro_video: outroVideo,
     }),
   )
   for (const f of files) {

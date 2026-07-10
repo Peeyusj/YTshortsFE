@@ -25,10 +25,27 @@
 // is the upload's unique `key`. That output shape is UNCHANGED from before, so the
 // backend/stitch contract is untouched — this is purely a richer editing surface.
 import { useEffect, useRef, useState } from 'react'
-import { probeAudioUrl } from '../api/client'
+import { probeAudioUrl, soundAudioUrl } from '../api/client'
 
 const X_OPTS = ['left', 'center', 'right']
 const Y_OPTS = ['upper', 'lower']
+const ANIM_OPTS = [
+  { id: 'none', label: 'None' },
+  { id: 'top', label: 'Top' },
+  { id: 'bottom', label: 'Bottom' },
+  { id: 'left', label: 'Left' },
+  { id: 'right', label: 'Right' },
+]
+// CSS-only illustration of each direction's off-screen starting transform —
+// purely for the in-browser preview; the real render uses the ffmpeg overlay
+// expressions built in stitch_video.py's _overlay_xy().
+const ANIM_OFFSET = {
+  none: 'translate(0, 0)',
+  top: 'translateY(-140%)',
+  bottom: 'translateY(140%)',
+  left: 'translateX(-140%)',
+  right: 'translateX(140%)',
+}
 const MAX_STICKERS = 5 // soft guardrail
 const MIN_SECONDS = 2 // soft quality warning threshold
 const MIN_LEN = 0.3 // shortest block you can drag/trim to, in seconds
@@ -76,12 +93,16 @@ export default function StickerTimeline({
   placements,
   onChange,
   disabled,
+  sounds = [],
+  background = 'black',
+  topFrac = 1280 / 1920,
 }) {
   const fileInputRef = useRef(null)
   const contentRef = useRef(null) // fixed-width inner; the seconds<->pixels frame
   const imgTrackRef = useRef(null) // pointer-capture surface for block editing
   const audioRef = useRef(null)
   const waveCanvasRef = useRef(null)
+  const sfxPreviewRef = useRef(null) // reused <audio> for the sound-effect preview button
   const drag = useRef(null) // active block interaction (see beginX handlers)
   const scrubbing = useRef(false)
 
@@ -93,6 +114,7 @@ export default function StickerTimeline({
   const [peaks, setPeaks] = useState(null) // normalized waveform samples [0..1]
   const [playing, setPlaying] = useState(false)
   const [cursor, setCursor] = useState(0) // playhead position in seconds
+  const [stagePos, setStagePos] = useState('on') // CSS slide-in preview: 'off' | 'on'
 
   const secToPx = (s) => s * pps
   const totalW = duration ? Math.max(secToPx(duration), 320) : 0
@@ -234,6 +256,24 @@ export default function StickerTimeline({
     if (selectedId === id) setSelectedId(null)
   }
 
+  // Replay the CSS slide-in illustration: snap to the off-screen offset, then
+  // (two rAFs later, so the browser actually paints the snap first) transition
+  // back to rest — this is purely a visual mock, decoupled from the real ffmpeg
+  // overlay animation, since ffmpeg output can't be rendered here.
+  function previewAnimation() {
+    setStagePos('off')
+    requestAnimationFrame(() => requestAnimationFrame(() => setStagePos('on')))
+  }
+
+  function playSoundPreview(soundId) {
+    if (!soundId) return
+    if (!sfxPreviewRef.current) sfxPreviewRef.current = new Audio()
+    const a = sfxPreviewRef.current
+    a.src = soundAudioUrl(soundId)
+    a.currentTime = 0
+    a.play().catch(() => {})
+  }
+
   // Empty-track pointer down with an image selected => start drawing a new block.
   function trackDown(e) {
     if (disabled || !selectedKey || !duration) return
@@ -290,7 +330,10 @@ export default function StickerTimeline({
         const id = nextId()
         onChange([
           ...placements,
-          { id, image: selectedKey, start: round2(a), end: round2(b), x: 'center', y: 'upper' },
+          {
+            id, image: selectedKey, start: round2(a), end: round2(b), x: 'center', y: 'upper',
+            full_width: false, animation: 'none', animation_duration: 0.4, sound_id: null,
+          },
         ])
         setSelectedId(id)
       }
@@ -308,8 +351,37 @@ export default function StickerTimeline({
     for (let t = 0; t <= duration + 1e-6; t += step) ticks.push(+t.toFixed(3))
   }
 
+  // ---- 9:16 live preview ----------------------------------------------------
+  // Which placements are on screen at the playhead, and where they sit in the
+  // TOP region. Mirrors stitch_video.py's _overlay_xy presets (left/center/right
+  // x, upper/lower y, or full-width) as CSS percentages so the preview roughly
+  // matches the final render. Positions are within the top region only.
+  const activePlacements = placements.filter((p) => cursor >= p.start && cursor <= p.end)
+  const previewStyle = (p) => {
+    const MX = 6 // horizontal margin %
+    const MY = 5 // vertical margin % (within the top region)
+    const s = { position: 'absolute' }
+    if (p.full_width) {
+      s.left = '0%'
+      s.width = '100%'
+    } else {
+      s.width = '34%'
+      if (p.x === 'left') s.left = `${MX}%`
+      else if (p.x === 'right') s.right = `${MX}%`
+      else {
+        s.left = '50%'
+        s.transform = 'translateX(-50%)'
+      }
+    }
+    if (p.y === 'lower') s.bottom = `${MY}%`
+    else s.top = `${MY}%`
+    return s
+  }
+  const bgHex = background === 'white' ? '#ffffff' : '#000000'
+
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+      <div className="min-w-0 space-y-3 lg:flex-1">
       <label className="block text-sm font-medium text-slate-200">
         Image timeline{' '}
         {duration ? <span className="text-slate-500">({duration.toFixed(1)}s)</span> : null}
@@ -640,22 +712,179 @@ export default function StickerTimeline({
                   }),
                 )}
               </div>
+
+              {/* full width toggle — spans the whole top-region width, ignores x */}
+              <label className="flex items-center gap-2 text-[11px] text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={selected.full_width}
+                  onChange={(e) => {
+                    const full_width = e.target.checked
+                    const patch = { full_width }
+                    // Left/right slide-in doesn't make sense at full width.
+                    if (full_width && (selected.animation === 'left' || selected.animation === 'right')) {
+                      patch.animation = 'none'
+                    }
+                    updatePlacement(selected.id, patch)
+                  }}
+                  className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 text-indigo-600
+                             focus:ring-1 focus:ring-indigo-500"
+                />
+                Full width (spans the whole top region)
+              </label>
+
+              {/* slide-in animation direction */}
+              <div className="space-y-1">
+                <div className="text-[11px] text-slate-400">Slide in from</div>
+                <div className="flex flex-wrap gap-1">
+                  {ANIM_OPTS.map((a) => {
+                    const disabledOpt = selected.full_width && (a.id === 'left' || a.id === 'right')
+                    const on = selected.animation === a.id
+                    return (
+                      <button
+                        key={a.id}
+                        type="button"
+                        disabled={disabledOpt}
+                        onClick={() => updatePlacement(selected.id, { animation: a.id })}
+                        className={
+                          'rounded px-2 py-1 text-[10px] disabled:cursor-not-allowed disabled:opacity-30 ' +
+                          (on ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')
+                        }
+                      >
+                        {a.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* animation duration + CSS-only preview (illustrative, not the real render) */}
+              {selected.animation !== 'none' && (
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-1 text-[11px] text-slate-400">
+                    speed
+                    <input
+                      type="range"
+                      min={0.1}
+                      max={1.5}
+                      step={0.05}
+                      value={selected.animation_duration}
+                      onChange={(e) =>
+                        updatePlacement(selected.id, { animation_duration: +e.target.value })
+                      }
+                      className="w-20 accent-indigo-500"
+                    />
+                    <span className="font-mono text-indigo-300">{selected.animation_duration.toFixed(2)}s</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={previewAnimation}
+                    className="rounded border border-slate-700 px-2 py-0.5 text-[10px] text-slate-200 hover:bg-slate-800"
+                  >
+                    ▶ Preview
+                  </button>
+                  <div className="relative h-10 w-16 overflow-hidden rounded border border-slate-700 bg-slate-950">
+                    <div
+                      style={{
+                        transform: stagePos === 'off' ? ANIM_OFFSET[selected.animation] : 'translate(0, 0)',
+                        transitionProperty: 'transform',
+                        transitionDuration: `${selected.animation_duration}s`,
+                        transitionTimingFunction: 'ease-out',
+                      }}
+                      className="absolute inset-1 rounded bg-indigo-500"
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* sound effect played when this sticker slides in */}
+              <div className="flex items-center gap-2">
+                <select
+                  value={selected.sound_id ?? ''}
+                  onChange={(e) => updatePlacement(selected.id, { sound_id: e.target.value || null })}
+                  className="flex-1 rounded border border-slate-700 bg-slate-800 px-1.5 py-1 text-[11px] text-slate-200"
+                >
+                  <option value="">No sound</option>
+                  {sounds.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  disabled={!selected.sound_id}
+                  onClick={() => playSoundPreview(selected.sound_id)}
+                  title="Preview sound"
+                  className="rounded border border-slate-700 px-2 py-1 text-[10px] text-slate-200
+                             hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  ▶
+                </button>
+              </div>
             </div>
           )}
         </>
       )}
 
-      {/* --- soft quality warnings (don't block generation) --- */}
-      {(tooMany || tooShort.length > 0) && (
-        <div className="space-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
-          {tooMany && (
-            <div>⚠ {placements.length} images — consider keeping it ≤ {MAX_STICKERS} for a clean look.</div>
-          )}
-          {tooShort.length > 0 && (
-            <div>⚠ {tooShort.length} image(s) shorter than {MIN_SECONDS}s may flash by too fast.</div>
-          )}
+        {/* --- soft quality warnings (don't block generation) --- */}
+        {(tooMany || tooShort.length > 0) && (
+          <div className="space-y-1 rounded-lg border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
+            {tooMany && (
+              <div>⚠ {placements.length} images — consider keeping it ≤ {MAX_STICKERS} for a clean look.</div>
+            )}
+            {tooShort.length > 0 && (
+              <div>⚠ {tooShort.length} image(s) shorter than {MIN_SECONDS}s may flash by too fast.</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ---- right: live 9:16 preview (shows images at the playhead) ---- */}
+      <div className="lg:w-60 lg:shrink-0">
+        <div className="lg:sticky lg:top-4">
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="text-sm font-medium text-slate-200">Preview</span>
+            <span className="font-mono text-[10px] text-slate-500">{fmtClock(cursor)}</span>
+          </div>
+          <div className="mx-auto w-40 overflow-hidden rounded-lg border border-slate-700 lg:w-full">
+            {/* 9:16 frame: top region (captions bg) + bottom gameplay slot */}
+            <div className="relative aspect-9/16 w-full bg-slate-950">
+              {/* top region */}
+              <div
+                className="absolute inset-x-0 top-0 overflow-hidden"
+                style={{ height: `${topFrac * 100}%`, background: bgHex }}
+              >
+                {activePlacements.map((p) => (
+                  <img
+                    key={p.id}
+                    src={uploads.find((u) => u.key === p.image)?.url}
+                    alt=""
+                    style={previewStyle(p)}
+                    className="pointer-events-none rounded-sm object-contain"
+                  />
+                ))}
+                {duration && activePlacements.length === 0 && (
+                  <div className="flex h-full items-center justify-center px-2 text-center text-[9px] text-slate-500/70">
+                    captions area
+                  </div>
+                )}
+              </div>
+              {/* bottom gameplay slot */}
+              <div
+                className="absolute inset-x-0 bottom-0 flex items-center justify-center
+                           bg-linear-to-b from-slate-800 to-slate-900 text-[9px] text-slate-500"
+                style={{ height: `${(1 - topFrac) * 100}%` }}
+              >
+                gameplay clip
+              </div>
+            </div>
+          </div>
+          <p className="mt-2 text-[10px] leading-snug text-slate-500">
+            Play or scrub the strip — images pop in at their timestamps here, positioned like the final video.
+          </p>
         </div>
-      )}
+      </div>
     </div>
   )
 }

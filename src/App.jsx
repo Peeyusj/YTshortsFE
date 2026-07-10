@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { getClips, getHealth, getMusic, getSplits, getVoices, probeDuration } from './api/client'
+import {
+  getCaptionStyles,
+  getClips,
+  getHealth,
+  getMusic,
+  getSounds,
+  getSplits,
+  getVoices,
+  probeDuration,
+} from './api/client'
 import { useGenerationJob } from './hooks/useGenerationJob'
 import ScriptInput from './components/ScriptInput'
 import ExpressionGuide from './components/ExpressionGuide'
@@ -10,7 +19,9 @@ import ClipSelect from './components/ClipSelect'
 import BackgroundToggle from './components/BackgroundToggle'
 import SplitSelect from './components/SplitSelect'
 import MusicSelect from './components/MusicSelect'
+import CaptionStyleSelect from './components/CaptionStyleSelect'
 import StickerTimeline from './components/StickerTimeline'
+import IntroOutroVideo from './components/IntroOutroVideo'
 import OutroToggle from './components/OutroToggle'
 import ProgressStages from './components/ProgressStages'
 import VideoResult from './components/VideoResult'
@@ -26,15 +37,21 @@ export default function App() {
   const [split, setSplit] = useState('') // Feature #5: top/bottom split
   const [music, setMusic] = useState('') // background music id ('' = none)
   const [musicVolume, setMusicVolume] = useState(0.18) // 0..1, under the voice
+  const [captionStyle, setCaptionStyle] = useState('') // caption font/colour preset id
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
+  // Intro/outro VIDEO wraps (session only): each is { key, name, file, url } or null.
+  const [introVideo, setIntroVideo] = useState(null)
+  const [outroVideo, setOutroVideo] = useState(null)
 
   // --- options loaded from the backend ---
   const [voices, setVoices] = useState([])
   const [clips, setClips] = useState([])
   const [splits, setSplits] = useState([])
   const [musicOptions, setMusicOptions] = useState([])
+  const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
+  const [captionStyles, setCaptionStyles] = useState([])
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
@@ -52,8 +69,16 @@ export default function App() {
   // Load all backend-driven options once on mount. Defaults come from the
   // registries so the frontend hardcodes no voice/clip/split ids.
   useEffect(() => {
-    Promise.all([getVoices(), getClips(), getSplits(), getMusic(), getHealth()])
-      .then(([voiceData, clipData, splitData, musicData, healthData]) => {
+    Promise.all([
+      getVoices(),
+      getClips(),
+      getSplits(),
+      getMusic(),
+      getSounds(),
+      getCaptionStyles(),
+      getHealth(),
+    ])
+      .then(([voiceData, clipData, splitData, musicData, soundData, captionStyleData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -64,6 +89,9 @@ export default function App() {
         // default is null (no music) -> '' keeps the "None" option selected.
         setMusic(musicData.default ?? '')
         setMusicVolume(musicData.default_volume ?? 0.18)
+        setSoundOptions(soundData.sounds ?? [])
+        setCaptionStyles(captionStyleData.styles ?? [])
+        setCaptionStyle(captionStyleData.default ?? '')
         setHealth(healthData)
       })
       .catch((err) =>
@@ -125,12 +153,41 @@ export default function App() {
     setPlacements((prev) => prev.filter((p) => p.image !== key))
   }
 
+  // Intro/outro video slots. Build a session upload record (unique key = the
+  // filename the backend saves it under) and revoke the old preview URL when
+  // replaced/cleared so we don't leak object URLs.
+  function pickWrapVideo(setter) {
+    return (file) => {
+      const safe = file.name.replace(/[^\w.-]+/g, '_')
+      const key = `${uploadSeq.current++}_${safe}`
+      setter((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url)
+        return { key, name: file.name, file, url: URL.createObjectURL(file) }
+      })
+    }
+  }
+  function clearWrapVideo(setter) {
+    return () =>
+      setter((prev) => {
+        if (prev) URL.revokeObjectURL(prev.url)
+        return null
+      })
+  }
+
+  // Top-region fraction of the selected split (top / 1920) for the 9:16 preview.
+  const selectedSplit = splits.find((s) => s.id === split) ?? null
+  const topFrac = selectedSplit?.top ? selectedSplit.top / 1920 : 1280 / 1920
+
   function handleGenerate() {
     // Strip the client-only `id` from placements; backend wants {image,start,end,x,y}.
     const stickers = placements.map(({ id, ...rest }) => rest)
     // Only send images actually used by a placement.
     const usedKeys = new Set(placements.map((p) => p.image))
     const files = uploads.filter((u) => usedKeys.has(u.key))
+    // Intro/outro clips ride in the same `files` part (keyed by their filename);
+    // the payload references them by that key via intro_video/outro_video.
+    if (introVideo) files.push(introVideo)
+    if (outroVideo) files.push(outroVideo)
     // Only send a description for Parler voices; edge ignores it anyway.
     start({
       text,
@@ -144,6 +201,9 @@ export default function App() {
       showOutro,
       music,
       musicVolume,
+      captionStyle,
+      introVideo: introVideo?.key ?? null,
+      outroVideo: outroVideo?.key ?? null,
       files,
     })
   }
@@ -154,7 +214,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto max-w-5xl px-4 py-8">
+      <div className="mx-auto max-w-7xl px-4 py-8">
         <header className="mb-6">
           <h1 className="text-xl font-semibold">Shorts Studio</h1>
           <p className="text-sm text-slate-400">Turn a script into a 9:16 short.</p>
@@ -208,17 +268,20 @@ export default function App() {
               onVolumeChange={setMusicVolume}
               disabled={isBusy}
             />
-            <StickerTimeline
-              duration={timelineDuration}
-              words={timelineWords}
-              probeId={probeId}
-              loading={probing}
-              onLoadTimeline={handleLoadTimeline}
-              uploads={uploads}
-              onAddFiles={handleAddFiles}
-              onRemoveUpload={handleRemoveUpload}
-              placements={placements}
-              onChange={setPlacements}
+            <CaptionStyleSelect
+              styles={captionStyles}
+              value={captionStyle}
+              onChange={setCaptionStyle}
+              background={background}
+              disabled={isBusy}
+            />
+            <IntroOutroVideo
+              intro={introVideo}
+              outro={outroVideo}
+              onPickIntro={pickWrapVideo(setIntroVideo)}
+              onPickOutro={pickWrapVideo(setOutroVideo)}
+              onClearIntro={clearWrapVideo(setIntroVideo)}
+              onClearOutro={clearWrapVideo(setOutroVideo)}
               disabled={isBusy}
             />
             <OutroToggle
@@ -286,6 +349,26 @@ export default function App() {
             )}
           </section>
         </div>
+
+        {/* ---------- full-width image-timeline editor + 9:16 preview ---------- */}
+        <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-5">
+          <StickerTimeline
+            duration={timelineDuration}
+            words={timelineWords}
+            probeId={probeId}
+            loading={probing}
+            onLoadTimeline={handleLoadTimeline}
+            uploads={uploads}
+            onAddFiles={handleAddFiles}
+            onRemoveUpload={handleRemoveUpload}
+            placements={placements}
+            onChange={setPlacements}
+            disabled={isBusy}
+            sounds={soundOptions}
+            background={background}
+            topFrac={topFrac}
+          />
+        </section>
       </div>
     </div>
   )
