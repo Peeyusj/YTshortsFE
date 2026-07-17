@@ -70,6 +70,43 @@ export function voiceSampleUrl(voiceId) {
   return `${API_BASE}/api/voices/${voiceId}/sample`
 }
 
+// --- AI scene images (optional feature) ------------------------------------
+// Drives the image-style selector + count control. Returns
+//   { styles: [{ id, label, prompt_suffix, description }], default,
+//     default_count, min_count, max_count }
+export function getImageStyles() {
+  return request('/api/image-styles')
+}
+
+// Kick off AI scene-image generation. `duration` is the real narration length in
+// SECONDS from probeDuration(). `referenceFile` (optional File) is an image the
+// whole batch takes inspiration from. Returns { id }; poll getSceneJob(id).
+//
+// Multipart (same pattern as createJob): a `payload` JSON part + an optional
+// `reference` file part. No Content-Type header — the browser sets the
+// multipart boundary itself for FormData bodies.
+export function generateScenes({ text, duration, style, count, referenceFile = null }) {
+  const form = new FormData()
+  form.append('payload', JSON.stringify({ text, duration, style, count }))
+  if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
+  return request('/api/scenes/generate', { method: 'POST', body: form })
+}
+
+// Poll target for scene-image generation. Returns
+//   { id, status, stage, done, total, style, error,
+//     scenes: [{ image, prompt, start, end, url }] }
+// (url is a RELATIVE path; use sceneImageUrl() to get a fetchable absolute URL.)
+export function getSceneJob(id) {
+  return request(`/api/scenes/${id}`)
+}
+
+// Absolute URL to a generated scene PNG — drop into an <img src>. The timeline
+// references the image itself as "generated:<id>/<name>" (a placement `image`),
+// which the backend resolves at render time.
+export function sceneImageUrl(id, name) {
+  return `${API_BASE}/api/scenes/${id}/images/${name}`
+}
+
 // Run ONLY the voice stage to measure the real narration, so the Canva-like
 // timeline can be drawn against true seconds. Returns
 //   { duration, words: [{ word, start, end }], probe_id }

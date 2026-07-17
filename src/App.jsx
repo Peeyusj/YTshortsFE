@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCaptionStyles,
   getClips,
   getHealth,
+  getImageStyles,
   getMusic,
   getSounds,
   getSplits,
@@ -20,6 +21,7 @@ import BackgroundToggle from './components/BackgroundToggle'
 import SplitSelect from './components/SplitSelect'
 import MusicSelect from './components/MusicSelect'
 import CaptionStyleSelect from './components/CaptionStyleSelect'
+import AutoImageGenerator from './components/AutoImageGenerator'
 import StickerTimeline from './components/StickerTimeline'
 import IntroOutroVideo from './components/IntroOutroVideo'
 import OutroToggle from './components/OutroToggle'
@@ -40,6 +42,15 @@ export default function App() {
   const [captionStyle, setCaptionStyle] = useState('') // caption font/colour preset id
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
+  // AI scene images (optional): the toggle + style/count controls, and the images
+  // the backend generated. Generated images live SEPARATELY from `uploads` because
+  // they aren't File objects (nothing to upload) — they're server-side PNGs the
+  // render references as "generated:<id>/<file>". Each is { key, label, url }.
+  const [autoImageOn, setAutoImageOn] = useState(false)
+  const [imageStyle, setImageStyle] = useState('')
+  const [imageCount, setImageCount] = useState(5)
+  const [imageCountBounds, setImageCountBounds] = useState({ min: 1, max: 30 })
+  const [generatedImages, setGeneratedImages] = useState([])
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
   // Intro/outro VIDEO wraps (session only): each is { key, name, file, url } or null.
   const [introVideo, setIntroVideo] = useState(null)
@@ -52,6 +63,7 @@ export default function App() {
   const [musicOptions, setMusicOptions] = useState([])
   const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
   const [captionStyles, setCaptionStyles] = useState([])
+  const [imageStyles, setImageStyles] = useState([]) // AI image styles
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
@@ -76,9 +88,10 @@ export default function App() {
       getMusic(),
       getSounds(),
       getCaptionStyles(),
+      getImageStyles(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, musicData, soundData, captionStyleData, healthData]) => {
+      .then(([voiceData, clipData, splitData, musicData, soundData, captionStyleData, imageStyleData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -92,6 +105,14 @@ export default function App() {
         setSoundOptions(soundData.sounds ?? [])
         setCaptionStyles(captionStyleData.styles ?? [])
         setCaptionStyle(captionStyleData.default ?? '')
+        // AI image styles + count bounds (feature is off by default via the toggle).
+        setImageStyles(imageStyleData.styles ?? [])
+        setImageStyle(imageStyleData.default ?? '')
+        setImageCount(imageStyleData.default_count ?? 5)
+        setImageCountBounds({
+          min: imageStyleData.min_count ?? 1,
+          max: imageStyleData.max_count ?? 30,
+        })
         setHealth(healthData)
       })
       .catch((err) =>
@@ -144,6 +165,13 @@ export default function App() {
     setUploads((prev) => [...prev, ...additions])
   }
   function handleRemoveUpload(key) {
+    // Generated images live in their own state (no object URL to revoke) — remove
+    // there; everything else is a user upload.
+    if (String(key).startsWith('generated:')) {
+      setGeneratedImages((prev) => prev.filter((g) => g.key !== key))
+      setPlacements((prev) => prev.filter((p) => p.image !== key))
+      return
+    }
     setUploads((prev) => {
       const gone = prev.find((u) => u.key === key)
       if (gone) URL.revokeObjectURL(gone.url)
@@ -152,6 +180,41 @@ export default function App() {
     // Drop any placements that referenced the removed image.
     setPlacements((prev) => prev.filter((p) => p.image !== key))
   }
+
+  // AI scene images finished: replace the previous AI batch and auto-create a
+  // timeline block for each at the LLM's suggested start/end, leaving any
+  // manually-placed images untouched. The user then reviews/adjusts/deletes.
+  function handleGeneratedImages(images) {
+    setGeneratedImages(images)
+    setPlacements((prev) => {
+      const manual = prev.filter((p) => !String(p.image).startsWith('generated:'))
+      const auto = images.map((img) => ({
+        id: `gen-${img.key}`,
+        image: img.key, // "generated:<sceneJobId>/<file>" — backend resolves it
+        start: img.start,
+        end: img.end,
+        x: 'center',
+        y: 'upper',
+        full_width: false,
+        animation: 'none',
+        animation_duration: 0.4,
+        sound_id: null,
+      }))
+      return [...manual, ...auto]
+    })
+  }
+
+  // What the timeline shows as placeable/previewable images: user uploads PLUS
+  // generated images (in the same { key, label, url } shape). Generated entries
+  // carry no File, so they're excluded from the multipart upload in handleGenerate
+  // (which reads from `uploads`, not this merged list).
+  const timelineImages = useMemo(
+    () => [
+      ...uploads,
+      ...generatedImages.map((g) => ({ key: g.key, label: g.label, url: g.url })),
+    ],
+    [uploads, generatedImages],
+  )
 
   // Intro/outro video slots. Build a session upload record (unique key = the
   // filename the backend saves it under) and revoke the old preview URL when
@@ -275,6 +338,21 @@ export default function App() {
               background={background}
               disabled={isBusy}
             />
+            <AutoImageGenerator
+              enabled={autoImageOn}
+              onToggle={setAutoImageOn}
+              styles={imageStyles}
+              style={imageStyle}
+              onStyleChange={setImageStyle}
+              count={imageCount}
+              onCountChange={setImageCount}
+              minCount={imageCountBounds.min}
+              maxCount={imageCountBounds.max}
+              text={text}
+              duration={timelineDuration}
+              disabled={isBusy}
+              onImagesReady={handleGeneratedImages}
+            />
             <IntroOutroVideo
               intro={introVideo}
               outro={outroVideo}
@@ -358,7 +436,7 @@ export default function App() {
             probeId={probeId}
             loading={probing}
             onLoadTimeline={handleLoadTimeline}
-            uploads={uploads}
+            uploads={timelineImages}
             onAddFiles={handleAddFiles}
             onRemoveUpload={handleRemoveUpload}
             placements={placements}
