@@ -1,16 +1,16 @@
 # Component Reference (YTshortsFE)
 
-**What this covers:** all 12 of the simpler components in `src/components/`. The big `StickerTimeline` has its own doc: [STICKER-TIMELINE.md](STICKER-TIMELINE.md). **Read first:** [FRONTEND.md](FRONTEND.md) for the `App.jsx` state model these bind to.
+**What this covers:** all 14 of the simpler components in `src/components/` (11 unchanged + `VoiceSelect`'s new preview feature + 3 brand-new ones). The big `StickerTimeline` has its own doc: [STICKER-TIMELINE.md](STICKER-TIMELINE.md). **Read first:** [FRONTEND.md](FRONTEND.md) for the `App.jsx` state model these bind to.
 
 ---
 
-## Shared patterns (true for all 12)
+## Shared patterns (mostly still true — two components now break rule 1)
 
-1. **Stateless & fully controlled.** None contains `useState`/`useEffect`/`useRef`. All state lives in `App.jsx`; each control gets `value` + `onChange` (or equivalents) + `disabled` and pushes changes up.
+1. **Stateless & fully controlled, with two new exceptions.** The original components contain no `useState`/`useEffect`/`useRef`. **`VoiceSelect`** and **`IntroOutroVideo`** now have small local state (a preview-playback status enum; nothing structural) — still receive all their real data via props, just manage a UI-only interaction locally rather than lifting it to `App.jsx`. Everything else remains fully controlled.
 2. **`disabled` is always `isBusy`** — the whole form freezes during a render.
-3. **Backend-driven options.** No component hardcodes voice/clip/split/music ids — they arrive as props from `App.jsx`'s mount `Promise.all`. (The one exception: `BackgroundToggle`, whose two options are a fixed frontend list.)
-4. **Dark Tailwind theme** — slate-950 bg, slate-100 text, indigo accent, emerald=success, rose=error, amber=warning.
-5. **Zero orphans.** All 12 are imported and rendered in `App.jsx`.
+3. **Backend-driven options.** No component hardcodes voice/clip/split/music/sound/caption-style/image-style ids — they arrive as props from `App.jsx`'s mount `Promise.all` (now 8 calls). (The one exception: `BackgroundToggle`, whose two options are a fixed frontend list.)
+4. **Dark Tailwind theme** — slate-950 bg, slate-100 text, indigo accent, emerald=success, rose=error, amber=warning. The 3 new components follow the same theme.
+5. **Zero orphans.** All 14 (of the "simple" set) are imported and rendered in `App.jsx`.
 
 ---
 
@@ -27,10 +27,11 @@
 - **App wiring:** `onInsertSample` appends the sample with a newline if the textarea has content, else replaces.
 - ⚠️ The tag semantics live here *and* in the backend TTS logic — no shared source of truth, so this table silently lies if the backend changes.
 
-### VoiceSelect
+### VoiceSelect (extended — now has a preview button)
 - **Props:** `voices`, `value`, `onChange`, `disabled`.
-- **Renders:** a `<select>` of `<option value={v.id}>{v.label}</option>`. Disabled when `disabled || voices.length === 0` (prevents interacting with an empty dropdown before data loads).
-- **Notes:** the voice objects carry more than this uses — `App.jsx` reads `.engine` (for `isParler`) and `.default_description` (Parler placeholder) elsewhere. Default comes from the API (`setVoice(voiceData.default)`), no frontend-hardcoded voice id.
+- **Renders:** a `<select>` of `<option value={v.id}>{v.label}</option>`, disabled when `disabled || voices.length === 0`, plus (new) a **▶ preview button** beside it.
+- **New local state:** `previewState` (`'idle'|'loading'|'error'`) — the one piece of genuine local state on this component. `playPreview()` lazily creates one reusable `Audio()` element, points its `src` at `voiceSampleUrl(value)` (`GET /api/voices/{id}/sample`), sets `previewState('loading')`, and plays; `oncanplay` → `'idle'`, `onerror`/a rejected `.play()` → `'error'` (renders "Couldn't play a preview for this voice." below the button). The button label itself shows `…` while loading.
+- **Notes:** the voice objects carry more than this uses — `App.jsx` reads `.engine` (for `isParler`) and `.default_description` (Parler placeholder) elsewhere. Default comes from the API (`setVoice(voiceData.default)`), no frontend-hardcoded voice id. The preview's first click per voice pays a real backend synthesis cost (cached after); later clicks for that voice are fast. See [../../YTshortsAnimation/docs/05-VOICE-ENGINES.md](../../YTshortsAnimation/docs/05-VOICE-ENGINES.md) §4.
 
 ### VoiceDescriptionInput
 - **Props:** `value` (voiceDescription), `onChange`, `placeholder`, `disabled`.
@@ -67,6 +68,25 @@
 - **Props:** `value` (bool), `onChange`, `disabled`, `available` (**tri-state**: true/false/undefined).
 - **Renders:** a checkbox "Show outro card (2s at the end)".
 - ⚠️ **Tri-state handling:** the warning "No assets/outroImage.png on the backend" shows only on strict `available === false`; when health hasn't loaded (`undefined`) no warning shows. `available` comes from `health?.outro`. The toggle stays functional even if the asset is missing (backend just skips the outro). Default `true` (frontend-owned), sent as `show_outro`.
+- **Not the same feature as `IntroOutroVideo` below** — this is the older static-*image* outro card; the newer component is video-based and fully independent (both can be active at once).
+
+### CaptionStyleSelect (new)
+- **Props:** `styles`, `value`, `onChange`, `background`, `disabled`.
+- **Renders:** a `<select id="caption-style">` populated from `styles` (`{id,label}`), plus a live preview panel showing `selected.description` and a styled text sample using `assColorToCss(selected.primary)`/`assColorToCss(selected.outline)` — a small local helper that reverses the backend's `.ass` `&HAABBGGRR` hex format into a CSS `#RRGGBB` string (see [../../YTshortsAnimation/docs/02-CONCEPTS.md](../../YTshortsAnimation/docs/02-CONCEPTS.md) §5 for the color-format explanation). When a style leaves `primary`/`outline` unset (the default `classic_bold` preset), the preview falls back to the `background` prop's implied contrast (`background==='white' ? black text : white text`), mirroring the backend's own auto-contrast fallback logic. The preview uses `WebkitTextStroke` to approximate an outline.
+- **Wiring:** `value`/`onChange` bind to App's `captionStyle` state, sent as `caption_style` on generate. A thin, stateless picker — same shape as `MusicSelect`.
+
+### IntroOutroVideo (new)
+- **Props:** `intro`, `outro` (each `{key,name,file,url}|null`), `onPickIntro`, `onPickOutro`, `onClearIntro`, `onClearOutro`, `disabled`.
+- **Renders:** two side-by-side "Slot" panels (Intro / Outro), each either a `<video controls muted>` preview + filename + Remove button (when set) or a dashed dropzone `<input type="file" accept="video/*">` (when empty). A `MAX_SECONDS = 5` label ("≤ 5s · full screen") is shown but is **advisory only** — ⚠️ the component never reads the picked file's actual duration; enforcement happens entirely server-side (a longer clip is silently truncated at render time — see [../../YTshortsAnimation/docs/04-PIPELINE.md](../../YTshortsAnimation/docs/04-PIPELINE.md) §4.8).
+- **Not the same feature as `OutroToggle`** — this is a genuinely separate mechanism (a real video clip, concatenated via a second ffmpeg pass) alongside the older static-image outro card; both can be used together.
+- **Wiring:** each slot's value is owned by `App.jsx` (`introVideo`/`outroVideo` state + the shared `pickWrapVideo`/`clearWrapVideo` factory handlers); the `key` doubles as both the multipart upload filename and the value referenced by `intro_video`/`outro_video` in the JSON payload.
+
+### AutoImageGenerator (new — the AI scene-image panel)
+- **Props:** `enabled`, `onToggle`, `styles`, `style`, `onStyleChange`, `count`, `onCountChange`, `minCount=1`, `maxCount=30`, `text`, `duration`, `disabled`, `onImagesReady`.
+- **Internal state:** uses the `useSceneImages()` hook (see [FRONTEND.md](FRONTEND.md)) for `{phase, job, error, isBusy, start, reset}`; local `refImage` state (`{file,url}|null`) for the optional reference-image upload; a `lastDelivered` ref to dedupe delivery per completed job id.
+- **Renders (when `enabled`):** a style `<select>` (with description), a count `<input type=number>` clamped to `[minCount,maxCount]`, an optional reference-image dropzone with thumbnail + Remove, a "Load the timeline first" hint when `duration` isn't yet known, a "Generate images" button, and — while busy — a progress readout (`"Planning scenes with the LLM…"` during the `planning` stage, `"Rendering images… done/total"` during `rendering`, with a progress bar that falls back to a hardcoded `15%` width if `total` is falsy).
+- **Delivery:** an effect fires when `phase==='done'`, guarded so each batch delivers exactly once; maps `job.scenes` → `{key: "generated:${job.id}/${s.image}", label: s.prompt?.slice(0,48) ?? s.image, url: sceneImageUrl(job.id, s.image), start: s.start, end: s.end}` and calls `onImagesReady(images)`. `App.jsx` wires this to `handleGeneratedImages`, which auto-creates one sticker placement per image.
+- **Guard logic:** `canGenerate = enabled && !disabled && !isBusy && text.trim().length>0 && hasDuration` — you must load the timeline (to get a real `duration`) before generating images, same prerequisite as the manual sticker flow.
 
 ### ProgressStages
 - **Props:** `stages` — the job snapshot's per-stage map `{voice:{status}, captions:{status}, stitch:{status}}` (status ∈ pending/running/done/error).
@@ -92,7 +112,10 @@
 | `background` | BackgroundToggle | `background` |
 | `split` | SplitSelect | `split` |
 | `music` + `musicVolume` | MusicSelect | `music` / `music_volume` |
+| `captionStyle` (new) | CaptionStyleSelect | `caption_style` |
 | `showOutro` | OutroToggle | `show_outro` |
+| `introVideo` / `outroVideo` (new) | IntroOutroVideo | `intro_video` / `outro_video` + `files` |
+| `autoImageOn`/`imageStyle`/`imageCount`/`generatedImages` (new) | AutoImageGenerator → merges into `placements` | (indirect — via `stickers[]`) |
 | `placements` + `uploads` + probe state | StickerTimeline → [STICKER-TIMELINE.md](STICKER-TIMELINE.md) | `stickers` + files |
 | `job.stages` | ProgressStages | (read-only) |
 | `job` | VideoResult | (read-only) |
@@ -101,7 +124,8 @@
 
 ## Key takeaways
 
-- All 12 are stateless controlled components; state and defaults live in `App.jsx`; `disabled` = `isBusy` everywhere.
+- 14 "simple" components (12 original + 2 new option pickers) are stateless controlled components; `VoiceSelect` and `IntroOutroVideo` now hold small UI-only local state (preview/upload status) as the two exceptions; `AutoImageGenerator` is a more substantial new component with its own polling hook.
 - Options are backend-driven except `BackgroundToggle`'s fixed 2-value list.
-- Conditional rendering: `VoiceDescriptionInput` only for Parler; `MusicSelect`'s panel/slider only when a track is picked; `VideoResult` only when done-with-video.
-- Watch the small traps: hardcoded 1920 in SplitSelect, hardcoded stage ORDER in ProgressStages, the cross-origin `download` caveat, and the emotion-tag table that duplicates backend semantics.
+- Conditional rendering: `VoiceDescriptionInput` only for Parler; `MusicSelect`'s panel/slider only when a track is picked; `VideoResult` only when done-with-video; `AutoImageGenerator`'s generate button only when a timeline duration exists.
+- `OutroToggle` (static image) and `IntroOutroVideo` (real video clips) are two independent, simultaneously-usable outro mechanisms — don't confuse them.
+- Watch the small traps: hardcoded 1920 in SplitSelect, hardcoded stage ORDER in ProgressStages, the cross-origin `download` caveat, the emotion-tag table that duplicates backend semantics, `IntroOutroVideo`'s client-unenforced 5s cap, and `AutoImageGenerator`'s hardcoded `15%` progress-bar fallback.

@@ -332,7 +332,7 @@ export default function StickerTimeline({
           ...placements,
           {
             id, image: selectedKey, start: round2(a), end: round2(b), x: 'center', y: 'upper',
-            full_width: false, animation: 'none', animation_duration: 0.4, sound_id: null,
+            full_width: true, animation: 'top', animation_duration: 0.15, sound_id: 'whoosh_soft',
           },
         ])
         setSelectedId(id)
