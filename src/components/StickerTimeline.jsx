@@ -46,6 +46,41 @@ const ANIM_OFFSET = {
   left: 'translateX(-140%)',
   right: 'translateX(140%)',
 }
+
+// Ken Burns motion effects (full-width only): zoom/pan that animates the image
+// CONTENT across the whole on-screen window so a still image looks "alive".
+// These map 1:1 to stitch_video.py's _kenburns_chain (zoompan) values.
+const EFFECT_OPTS = [
+  { id: 'zoom-in', label: 'Zoom in' },
+  { id: 'zoom-out', label: 'Zoom out' },
+  { id: 'pan-in', label: 'Pan →' },
+  { id: 'pan-out', label: 'Pan ←' },
+]
+const KENBURNS = new Set(EFFECT_OPTS.map((e) => e.id))
+// End zoom for zoom-in/out; constant zoom held during pans. MUST match
+// stitch_video.py's KB_ZOOM so the preview matches the render.
+const KB_ZOOM = 1.12
+
+// The live CSS transform for a Ken Burns effect at progress p (0..1 across the
+// image's on-screen window). Mirrors the zoompan crop math: zooms scale about
+// centre; pans hold the zoom and glide the (over-scaled) image sideways. The
+// image is object-cover inside an overflow-hidden region, so the pan overflow
+// is clipped exactly like the ffmpeg crop window.
+function kenBurnsTransform(effect, p) {
+  const dz = KB_ZOOM - 1
+  switch (effect) {
+    case 'zoom-in':
+      return `scale(${(1 + dz * p).toFixed(4)})`
+    case 'zoom-out':
+      return `scale(${(KB_ZOOM - dz * p).toFixed(4)})`
+    case 'pan-in': // left -> right
+      return `scale(${KB_ZOOM}) translateX(${((dz * (0.5 - p)) / KB_ZOOM * 100).toFixed(3)}%)`
+    case 'pan-out': // right -> left
+      return `scale(${KB_ZOOM}) translateX(${((dz * (p - 0.5)) / KB_ZOOM * 100).toFixed(3)}%)`
+    default:
+      return 'none'
+  }
+}
 const MAX_STICKERS = 5 // soft guardrail
 const MIN_SECONDS = 2 // soft quality warning threshold
 const MIN_LEN = 0.3 // shortest block you can drag/trim to, in seconds
@@ -115,6 +150,8 @@ export default function StickerTimeline({
   const [playing, setPlaying] = useState(false)
   const [cursor, setCursor] = useState(0) // playhead position in seconds
   const [stagePos, setStagePos] = useState('on') // CSS slide-in preview: 'off' | 'on'
+  const [kbProg, setKbProg] = useState(1) // 0..1 progress driving the Ken Burns motion preview
+  const kbRaf = useRef(null)
 
   const secToPx = (s) => s * pps
   const totalW = duration ? Math.max(secToPx(duration), 320) : 0
@@ -265,6 +302,22 @@ export default function StickerTimeline({
     requestAnimationFrame(() => requestAnimationFrame(() => setStagePos('on')))
   }
 
+  // Play the Ken Burns motion once (progress 0 -> 1) so the user can SEE the
+  // zoom/pan without rendering. Decoupled from the audio playhead — a quick
+  // ~2.5s sweep — but uses the exact same kenBurnsTransform() as the render.
+  function previewKenBurns(seconds = 2.5) {
+    cancelAnimationFrame(kbRaf.current)
+    const dur = Math.max(0.4, seconds) * 1000
+    const start = performance.now()
+    const step = (now) => {
+      const p = Math.min(1, (now - start) / dur)
+      setKbProg(p)
+      if (p < 1) kbRaf.current = requestAnimationFrame(step)
+    }
+    kbRaf.current = requestAnimationFrame(step)
+  }
+  useEffect(() => () => cancelAnimationFrame(kbRaf.current), [])
+
   function playSoundPreview(soundId) {
     if (!soundId) return
     if (!sfxPreviewRef.current) sfxPreviewRef.current = new Audio()
@@ -362,19 +415,34 @@ export default function StickerTimeline({
     const MY = 5 // vertical margin % (within the top region)
     const s = { position: 'absolute' }
     if (p.full_width) {
-      s.left = '0%'
+      // Full width COVERS the whole top region in the render (scale+crop, flush
+      // at 0,0 — see stitch_video.py build_filter_complex), so the preview must
+      // fill it edge-to-edge with object-cover, NOT a margin-inset contained
+      // band. This is the fix for "preview images look misaligned vs the video".
+      s.inset = 0
       s.width = '100%'
+      s.height = '100%'
+      s.objectFit = 'cover'
+      if (KENBURNS.has(p.animation)) {
+        // Drive the zoom/pan from the playhead so scrubbing shows the real
+        // motion at the real moment. Progress = how far through its window.
+        const prog = p.end > p.start ? clamp((cursor - p.start) / (p.end - p.start), 0, 1) : 0
+        s.transform = kenBurnsTransform(p.animation, prog)
+        s.transformOrigin = 'center center'
+      }
     } else {
-      s.width = '34%'
+      // Fixed-width sticker: 260px of the 1080px frame ~= 24%, aspect preserved.
+      s.width = '24%'
+      s.objectFit = 'contain'
       if (p.x === 'left') s.left = `${MX}%`
       else if (p.x === 'right') s.right = `${MX}%`
       else {
         s.left = '50%'
         s.transform = 'translateX(-50%)'
       }
+      if (p.y === 'lower') s.bottom = `${MY}%`
+      else s.top = `${MY}%`
     }
-    if (p.y === 'lower') s.bottom = `${MY}%`
-    else s.top = `${MY}%`
     return s
   }
   const bgHex = background === 'white' ? '#ffffff' : '#000000'
@@ -725,6 +793,10 @@ export default function StickerTimeline({
                     if (full_width && (selected.animation === 'left' || selected.animation === 'right')) {
                       patch.animation = 'none'
                     }
+                    // Ken Burns (zoom/pan) needs full width; drop it if turning off.
+                    if (!full_width && KENBURNS.has(selected.animation)) {
+                      patch.animation = 'none'
+                    }
                     updatePlacement(selected.id, patch)
                   }}
                   className="h-3.5 w-3.5 rounded border-slate-600 bg-slate-900 text-indigo-600
@@ -758,8 +830,41 @@ export default function StickerTimeline({
                 </div>
               </div>
 
-              {/* animation duration + CSS-only preview (illustrative, not the real render) */}
-              {selected.animation !== 'none' && (
+              {/* Ken Burns motion effect (zoom/pan) — full width only, since it
+                  fills the whole top region. Mutually exclusive with slide-in:
+                  both write `animation`, so at most one button is ever active. */}
+              <div className="space-y-1">
+                <div className="text-[11px] text-slate-400">
+                  Motion effect{' '}
+                  {!selected.full_width && (
+                    <span className="text-slate-600">(turn on full width to use)</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {EFFECT_OPTS.map((e) => {
+                    const on = selected.animation === e.id
+                    return (
+                      <button
+                        key={e.id}
+                        type="button"
+                        disabled={!selected.full_width}
+                        onClick={() =>
+                          updatePlacement(selected.id, { animation: on ? 'none' : e.id })
+                        }
+                        className={
+                          'rounded px-2 py-1 text-[10px] disabled:cursor-not-allowed disabled:opacity-30 ' +
+                          (on ? 'bg-emerald-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')
+                        }
+                      >
+                        {e.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* slide-in speed + CSS-only preview (illustrative, not the real render) */}
+              {['top', 'bottom', 'left', 'right'].includes(selected.animation) && (
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-1 text-[11px] text-slate-400">
                     speed
@@ -794,6 +899,37 @@ export default function StickerTimeline({
                       className="absolute inset-1 rounded bg-indigo-500"
                     />
                   </div>
+                </div>
+              )}
+
+              {/* Ken Burns motion preview: the ACTUAL selected image, moving with
+                  the same transform the render uses. Scrubbing the strip also
+                  shows this in the big 9:16 panel; this button plays it on demand. */}
+              {KENBURNS.has(selected.animation) && (
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      previewKenBurns(Math.min(2.5, Math.max(0.6, selected.end - selected.start)))
+                    }
+                    className="rounded border border-emerald-500/40 px-2 py-0.5 text-[10px] text-emerald-200 hover:bg-emerald-500/10"
+                  >
+                    ▶ Preview motion
+                  </button>
+                  <div className="relative aspect-27/32 h-14 overflow-hidden rounded border border-slate-700 bg-slate-950">
+                    <img
+                      src={uploads.find((u) => u.key === selected.image)?.url}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-cover"
+                      style={{
+                        transform: kenBurnsTransform(selected.animation, kbProg),
+                        transformOrigin: 'center center',
+                      }}
+                    />
+                  </div>
+                  <span className="text-[10px] text-slate-500">
+                    Moves the whole {(selected.end - selected.start).toFixed(1)}s it's on screen
+                  </span>
                 </div>
               )}
 
@@ -861,7 +997,7 @@ export default function StickerTimeline({
                     src={uploads.find((u) => u.key === p.image)?.url}
                     alt=""
                     style={previewStyle(p)}
-                    className="pointer-events-none rounded-sm object-contain"
+                    className="pointer-events-none rounded-sm"
                   />
                 ))}
                 {duration && activePlacements.length === 0 && (

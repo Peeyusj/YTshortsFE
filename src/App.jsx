@@ -195,8 +195,11 @@ export default function App() {
         end: img.end,
         x: 'center',
         y: 'upper',
-        full_width: false,
-        animation: 'none',
+        // AI scene images fill the top region and get a gentle Ken Burns zoom by
+        // default, so a still generated image looks "alive" without extra setup.
+        // The user can switch the effect (or off) per image in the timeline.
+        full_width: true,
+        animation: 'zoom-in',
         animation_duration: 0.4,
         sound_id: null,
       }))
