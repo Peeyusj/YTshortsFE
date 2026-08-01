@@ -386,6 +386,7 @@ export default function StickerTimeline({
           {
             id, image: selectedKey, start: round2(a), end: round2(b), x: 'center', y: 'upper',
             full_width: true, animation: 'top', animation_duration: 0.15, sound_id: 'whoosh_soft',
+            image_fit: 'cover',
           },
         ])
         setSelectedId(id)
@@ -857,6 +858,40 @@ export default function StickerTimeline({
                         }
                       >
                         {e.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Full-size fit mode — full width only. "cover" (default) fills the
+                  region and crops overflow; "contain" fits the whole image with
+                  no crop, padding letterbox borders with a blurred copy of it. */}
+              <div className="space-y-1">
+                <div className="text-[11px] text-slate-400">
+                  Fit{' '}
+                  {!selected.full_width && (
+                    <span className="text-slate-600">(turn on full width to use)</span>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {[
+                    { id: 'cover', label: 'Cover (crop to fill)' },
+                    { id: 'contain', label: 'Contain (no crop)' },
+                  ].map((f) => {
+                    const on = (selected.image_fit ?? 'cover') === f.id
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        disabled={!selected.full_width}
+                        onClick={() => updatePlacement(selected.id, { image_fit: f.id })}
+                        className={
+                          'rounded px-2 py-1 text-[10px] disabled:cursor-not-allowed disabled:opacity-30 ' +
+                          (on ? 'bg-indigo-500 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-700')
+                        }
+                      >
+                        {f.label}
                       </button>
                     )
                   })}

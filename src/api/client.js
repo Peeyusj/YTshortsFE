@@ -39,6 +39,10 @@ export function getSplits() {
   return request('/api/splits')
 }
 
+export function getCanvases() {
+  return request('/api/canvases')
+}
+
 // Drives the background-music dropdown. Returns
 //   { music: [{ id, label, path, artist, mood, description }], default, default_volume }
 // `default` is null (no music) and `default_volume` seeds the volume slider.
@@ -85,9 +89,12 @@ export function getImageStyles() {
 // Multipart (same pattern as createJob): a `payload` JSON part + an optional
 // `reference` file part. No Content-Type header — the browser sets the
 // multipart boundary itself for FormData bodies.
-export function generateScenes({ text, duration, style, count, referenceFile = null }) {
+export function generateScenes({ text, duration, style, count, split, canvas, referenceFile = null }) {
   const form = new FormData()
-  form.append('payload', JSON.stringify({ text, duration, style, count }))
+  // `split`/`canvas` (Feature: Full-size image mode + 16:9 support) tell the
+  // backend the target aspect so it can request images sized to match instead
+  // of a fixed square — see backend/config.py's resolve_canvas_split().
+  form.append('payload', JSON.stringify({ text, duration, style, count, split, canvas }))
   if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
   return request('/api/scenes/generate', { method: 'POST', body: form })
 }
@@ -146,11 +153,13 @@ export function createJob({
   clip,
   background,
   split,
+  canvas,
   stickers,
   showOutro,
   music,
   musicVolume,
   captionStyle,
+  captionsEnabled = true,
   introVideo = null,
   outroVideo = null,
   files = [],
@@ -168,6 +177,10 @@ export function createJob({
       clip,
       background,
       split,
+      // Canvas/aspect-ratio registry id (Feature: 16:9 support). "landscape"
+      // always renders full-screen server-side regardless of `split` — see
+      // backend/config.py's resolve_canvas_split().
+      canvas,
       // Each placement already carries full_width/animation/animation_duration/
       // sound_id alongside the original image/start/end/x/y — no transform needed.
       stickers,
@@ -178,6 +191,9 @@ export function createJob({
       music_volume: musicVolume,
       // Caption style preset registry id (font/size/weight/colours).
       caption_style: captionStyle,
+      // Subtitle on/off toggle. Off skips the captions pipeline stage entirely
+      // on the backend, not just the burn-in.
+      captions_enabled: captionsEnabled,
       // Intro/outro video wrap filenames (the clip files ride in `files` below,
       // keyed by these same names). null = not used.
       intro_video: introVideo,

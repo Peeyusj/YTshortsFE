@@ -29,6 +29,8 @@ export default function AutoImageGenerator({
   maxCount = 30,
   text,
   duration, // real narration length in seconds (null until the timeline is loaded)
+  split, // current split id (Feature: Full-size image mode) — sets the image request aspect
+  canvas, // current canvas id (Feature: 16:9 support) — sets the image request aspect
   disabled, // true while a render job is running
   onImagesReady,
 }) {
@@ -74,7 +76,7 @@ export default function AutoImageGenerator({
   const canGenerate = enabled && !disabled && !isBusy && text.trim().length > 0 && hasDuration
 
   function handleGenerate() {
-    start({ text, duration, style, count, referenceFile: refImage?.file ?? null })
+    start({ text, duration, style, count, split, canvas, referenceFile: refImage?.file ?? null })
   }
 
   return (

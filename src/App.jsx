@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
+  getCanvases,
   getCaptionStyles,
   getClips,
   getHealth,
@@ -19,8 +20,10 @@ import SpeedSlider from './components/SpeedSlider'
 import ClipSelect from './components/ClipSelect'
 import BackgroundToggle from './components/BackgroundToggle'
 import SplitSelect from './components/SplitSelect'
+import CanvasSelect from './components/CanvasSelect'
 import MusicSelect from './components/MusicSelect'
 import CaptionStyleSelect from './components/CaptionStyleSelect'
+import CaptionsToggle from './components/CaptionsToggle'
 import AutoImageGenerator from './components/AutoImageGenerator'
 import StickerTimeline from './components/StickerTimeline'
 import IntroOutroVideo from './components/IntroOutroVideo'
@@ -37,9 +40,11 @@ export default function App() {
   const [clip, setClip] = useState('')
   const [background, setBackground] = useState('black') // Feature #2: top bg colour
   const [split, setSplit] = useState('') // Feature #5: top/bottom split
+  const [canvas, setCanvas] = useState('') // Feature: 16:9 support — aspect-ratio id
   const [music, setMusic] = useState('') // background music id ('' = none)
   const [musicVolume, setMusicVolume] = useState(0.18) // 0..1, under the voice
   const [captionStyle, setCaptionStyle] = useState('') // caption font/colour preset id
+  const [captionsEnabled, setCaptionsEnabled] = useState(true) // subtitle burn-in, on by default
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
   // AI scene images (optional): the toggle + style/count controls, and the images
@@ -60,6 +65,7 @@ export default function App() {
   const [voices, setVoices] = useState([])
   const [clips, setClips] = useState([])
   const [splits, setSplits] = useState([])
+  const [canvases, setCanvases] = useState([])
   const [musicOptions, setMusicOptions] = useState([])
   const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
   const [captionStyles, setCaptionStyles] = useState([])
@@ -85,19 +91,22 @@ export default function App() {
       getVoices(),
       getClips(),
       getSplits(),
+      getCanvases(),
       getMusic(),
       getSounds(),
       getCaptionStyles(),
       getImageStyles(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, musicData, soundData, captionStyleData, imageStyleData, healthData]) => {
+      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, imageStyleData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
         setClip(clipData.default)
         setSplits(splitData.splits)
         setSplit(splitData.default)
+        setCanvases(canvasData.canvases)
+        setCanvas(canvasData.default)
         setMusicOptions(musicData.music)
         // default is null (no music) -> '' keeps the "None" option selected.
         setMusic(musicData.default ?? '')
@@ -263,11 +272,13 @@ export default function App() {
       clip,
       background,
       split,
+      canvas,
       stickers,
       showOutro,
       music,
       musicVolume,
       captionStyle,
+      captionsEnabled,
       introVideo: introVideo?.key ?? null,
       outroVideo: outroVideo?.key ?? null,
       files,
@@ -323,9 +334,36 @@ export default function App() {
               />
             )}
             <SpeedSlider value={speed} onChange={setSpeed} disabled={isBusy} />
-            <ClipSelect clips={clips} value={clip} onChange={setClip} disabled={isBusy} />
+            <CanvasSelect canvases={canvases} value={canvas} onChange={setCanvas} disabled={isBusy} />
+            <div className="space-y-1">
+              <ClipSelect
+                clips={clips}
+                value={clip}
+                onChange={setClip}
+                disabled={isBusy || split === 'full' || canvas === 'landscape'}
+              />
+              {(split === 'full' || canvas === 'landscape') && (
+                <p className="text-xs text-slate-400">
+                  Ignored — {canvas === 'landscape'
+                    ? 'landscape (16:9) videos always render full-screen, no gameplay clip.'
+                    : 'the "Full screen" split has no gameplay clip.'}
+                </p>
+              )}
+            </div>
             <BackgroundToggle value={background} onChange={setBackground} disabled={isBusy} />
-            <SplitSelect splits={splits} value={split} onChange={setSplit} disabled={isBusy} />
+            <div className="space-y-1">
+              <SplitSelect
+                splits={splits}
+                value={split}
+                onChange={setSplit}
+                disabled={isBusy || canvas === 'landscape'}
+              />
+              {canvas === 'landscape' && (
+                <p className="text-xs text-slate-400">
+                  Ignored — landscape (16:9) videos always render full-screen.
+                </p>
+              )}
+            </div>
             <MusicSelect
               music={musicOptions}
               value={music}
@@ -339,6 +377,11 @@ export default function App() {
               value={captionStyle}
               onChange={setCaptionStyle}
               background={background}
+              disabled={isBusy || !captionsEnabled}
+            />
+            <CaptionsToggle
+              value={captionsEnabled}
+              onChange={setCaptionsEnabled}
               disabled={isBusy}
             />
             <AutoImageGenerator
@@ -353,6 +396,8 @@ export default function App() {
               maxCount={imageCountBounds.max}
               text={text}
               duration={timelineDuration}
+              split={split}
+              canvas={canvas}
               disabled={isBusy}
               onImagesReady={handleGeneratedImages}
             />
