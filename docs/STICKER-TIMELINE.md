@@ -2,13 +2,13 @@
 
 **What this covers:** `src/components/StickerTimeline.jsx` (grew substantially — now also handles sound effects, slide-in animations, full-width mode, AI-generated images, and a live 9:16 preview panel) — the most complex UI in the project, explained so a beginner React dev could rebuild it. **Read first:** [FRONTEND.md](FRONTEND.md); the backend side of stickers is in [../../YTshortsAnimation/docs/04-PIPELINE.md](../../YTshortsAnimation/docs/04-PIPELINE.md) §4 and [../../YTshortsAnimation/docs/07-DATA-FLOW.md](../../YTshortsAnimation/docs/07-DATA-FLOW.md).
 
-> **Update:** every core mechanic described below (drag machines, waveform, coordinate system) is unchanged from the original design. What's new: each block can now carry an attached sound effect, a slide-in animation, and a "full width" flag; the component also renders a live 9:16 preview of the current playhead position; and the `uploads` prop now transparently contains both local File uploads AND AI-generated scene images (the component itself doesn't distinguish them — see [12-AI-IMAGE-GENERATION.md](../../YTshortsAnimation/docs/12-AI-IMAGE-GENERATION.md)).
+> **Update:** every core mechanic described below (drag machines, waveform, coordinate system) is unchanged from the original design. Phase 3/4: each block can carry an attached sound effect, a slide-in animation, and a "full width" flag; the component renders a live preview of the current playhead position; the `uploads` prop transparently contains both local File uploads AND AI-generated scene images (the component itself doesn't distinguish them — see [12-AI-IMAGE-GENERATION.md](../../YTshortsAnimation/docs/12-AI-IMAGE-GENERATION.md)). **Phase 5 update:** full-width blocks can now use **Ken Burns motion** (zoom-in/zoom-out/pan-in/pan-out) instead of a slide-in, plus a cover/contain fit toggle, plus a dedicated motion-preview mini-player. A prerequisite bug fix also changed how the live preview panel fits full-width images (`objectFit: cover` instead of `contain`) to actually match the real render.
 
 ---
 
 ## What it is
 
-A **Canva-style, audio-synced timeline editor** for placing sticker images ("Feature #3"). You upload images (or let the AI image generator populate some automatically), run a one-off voice synthesis ("probe") to learn the narration's *true* duration and per-word timings, then drag time-range blocks on a track: "show image X from second A to second B, at coarse screen position (x,y), optionally full-width, with a slide-in animation and an attached sound effect." The output is a list of placements — now `{id, image, start, end, x, y, full_width, animation, animation_duration, sound_id}`.
+A **Canva-style, audio-synced timeline editor** for placing sticker images ("Feature #3"). You upload images (or let the AI image generator populate some automatically), run a one-off voice synthesis ("probe") to learn the narration's *true* duration and per-word timings, then drag time-range blocks on a track: "show image X from second A to second B, at coarse screen position (x,y), optionally full-width, with a slide-in OR Ken Burns motion effect, a cover/contain fit, and an attached sound effect." The output is a list of placements — now `{id, image, start, end, x, y, full_width, animation, animation_duration, sound_id, image_fit}`.
 
 > **Disambiguation:** despite the name overlap in some notes, this has **nothing to do with "expressions"** — those are emotion tags handled by the separate `ExpressionGuide` component. The only "expressions" near stickers are the ffmpeg overlay coordinate expressions on the *backend* (now including the new animation interpolation expressions).
 
@@ -27,9 +27,12 @@ A **Canva-style, audio-synced timeline editor** for placing sticker images ("Fea
 | `DEFAULT_PPS` | `70` | default zoom (pixels per second) |
 | `MIN_PPS` / `MAX_PPS` | `30` / `160` | zoom clamp |
 | `WAVE_BARS` | `900` | waveform resolution (peak buckets), independent of zoom |
-| `ANIM_OPTS` (new) | `['none','top','bottom','left','right']` | slide-in direction picker options |
-| `ANIM_OFFSET` (new) | a map of direction → CSS offset | drives the illustrative CSS preview animation only — **decoupled from** the real ffmpeg overlay animation (which is computed server-side from `animation`/`animation_duration`) |
-| `MX` / `MY` (new) | `6` / `5` (%) | margins used by the new live-preview panel's positioning math — mirrors, but does not share code with, the backend's `_overlay_xy` margins |
+| `ANIM_OPTS` | `['none','top','bottom','left','right']` | slide-in direction picker options |
+| `ANIM_OFFSET` | a map of direction → CSS offset | drives the illustrative CSS preview animation only — **decoupled from** the real ffmpeg overlay animation (which is computed server-side from `animation`/`animation_duration`) |
+| `MX` / `MY` | `6` / `5` (%) | margins used by the live-preview panel's positioning math — mirrors, but does not share code with, the backend's `_overlay_xy` margins |
+| `EFFECT_OPTS` (new, Phase 5) | 4 Ken Burns options: Zoom in / Zoom out / Pan → / Pan ← | maps to `animation` values `zoom-in`/`zoom-out`/`pan-in`/`pan-out` |
+| `KENBURNS` (new) | `new Set(['zoom-in','zoom-out','pan-in','pan-out'])` | membership check used throughout to branch UI/preview logic |
+| `KB_ZOOM` (new) | `1.12` | ⚠️ hardcoded, must match `stitch_video.py`'s `KB_ZOOM` — no shared constant between the two repos |
 
 Helpers: `nextId()` → `p0`, `p1`, … (module-level counter, survives remount, resets on reload; client-only, stripped before sending); `clamp(v,lo,hi)` (⚠️ `clamp(NaN,…)` returns `NaN` — see the numeric-input bug); `round2(v)` (2-decimal storage); `niceStep(pps)` (ruler tick spacing ≥48px); `fmtClock`/`fmtTick` (time labels).
 
@@ -144,19 +147,29 @@ Each block can have an attached sound effect, edited from the block editor panel
 
 ---
 
-## Full-width mode + slide-in animation (new)
+## Full-width mode, animations (slide-in OR Ken Burns), and fit
 
-- **`full_width`** is a checkbox in the block editor. When enabled, it automatically resets `animation` to `'none'` if it was `'left'`/`'right'` (a left/right slide doesn't make sense for a block that already spans the full width) — the only cross-field validation logic in the component. Intended use: an AI-generated scene image acting as a full backdrop across the whole caption band, rather than a small badge.
-- **`animation`** is a direction picker (`ANIM_OPTS`: none/top/bottom/left/right) plus an `animation_duration` speed slider (0.1–1.5s, step 0.05). A "▶ Preview" button replays an **illustrative, CSS-only** animation using `ANIM_OFFSET` and a double-`requestAnimationFrame` snap-then-transition trick (render the element off-screen with no transition, then on the next frame apply the transition and move it to its resting position — this two-step dance is what makes the browser actually animate the move instead of snapping instantly). ⚠️ **This CSS preview is cosmetic only** — the real animation the video actually gets is computed server-side as a time-interpolated ffmpeg overlay `x`/`y` expression (see pipeline doc §4.5); the two are not the same code path and could in principle drift apart in feel.
+- **`full_width`** is a checkbox in the block editor. When enabled, it automatically resets `animation` to `'none'` if it was `'left'`/`'right'` (a left/right slide doesn't make sense for a block that already spans the full width) — one of two cross-field validation rules in the component (the other, new in Phase 5, is below). Intended use: an AI-generated scene image acting as a full backdrop across the whole caption band, rather than a small badge.
+- **`animation`** is a direction picker (`ANIM_OPTS`: none/top/bottom/left/right) plus an `animation_duration` speed slider (0.1–1.5s, step 0.05) for the slide-in family. A "▶ Preview" button replays an **illustrative, CSS-only** animation using `ANIM_OFFSET` and a double-`requestAnimationFrame` snap-then-transition trick (render the element off-screen with no transition, then on the next frame apply the transition and move it to its resting position — this two-step dance is what makes the browser actually animate the move instead of snapping instantly). ⚠️ **This CSS preview is cosmetic only** — the real animation the video actually gets is computed server-side as a time-interpolated ffmpeg overlay `x`/`y` expression (see [../../YTshortsAnimation/docs/04-PIPELINE.md](../../YTshortsAnimation/docs/04-PIPELINE.md) §4.5); the two are not the same code path and could in principle drift apart in feel.
+
+### Ken Burns motion (new, Phase 5)
+
+A second row of controls, **only enabled when `full_width` is true** (disabled with a "(turn on full width to use)" hint otherwise — the new cross-field rule): four toggle buttons (`EFFECT_OPTS`: Zoom in / Zoom out / Pan → / Pan ←) that set `animation` to one of the `KENBURNS` values via `updatePlacement(selected.id, { animation: on ? 'none' : effect.id })`. Selecting a Ken Burns effect is mutually exclusive with the slide-in directions — they share the same `animation` field, just different value ranges.
+
+- **Fit toggle:** a second button pair, "Cover (crop to fill)" / "Contain (no crop)", writes the new `image_fit` field — also full-width-only, and independent of which animation (if any) is selected. `image_fit` defaults to `"cover"` on every new placement (including AI-generated ones auto-placed by `App.jsx`).
+- **Motion preview mini-player:** rendered only when the selected block's `animation` is a Ken Burns value. A dedicated "▶ Preview motion" button drives `previewKenBurns(duration)` — a `requestAnimationFrame` loop over `Math.max(0.4, seconds)` (capped at 2.5s) updating a `kbProg` state variable (0→1), which feeds `kenBurnsTransform(effect, progress)`: a small helper that mirrors the *server-side* `zoompan` math (see the pipeline doc) in CSS `scale()`/`translateX()`, applied to a live `<img>` of the actual selected image in a small aspect-matched box. `kbRaf` (a ref) holds the animation-frame handle and is cancelled on unmount.
+- **The same `kenBurnsTransform` helper also drives the main live-preview panel** (below) — but there, progress comes from the **scrub playhead** (`(cursor - start) / (end - start)`), not a real-time loop, so scrubbing through a Ken Burns sticker visibly "scrubs" its zoom/pan too.
+- ⚠️ Both the manual `KB_ZOOM = 1.12` literal and the CSS-approximation nature of the whole preview are worth remembering: **this component's motion preview is always an approximation** of the real `zoompan`-filter render, not a pixel-accurate one.
 
 ---
 
-## The live 9:16 preview panel (new)
+## The live preview panel
 
-A new right-hand sidebar (`lg:w-60`) that renders a scaled-down mockup of the actual output frame at the current playhead position:
+A right-hand sidebar (`lg:w-60`) that renders a scaled-down mockup of the actual output frame at the current playhead position:
 - `activePlacements` = placements where `cursor` falls within `[start, end]` — i.e., "what would be visible right now."
-- `previewStyle(p)` maps each active placement's `x`/`y`/`full_width` onto CSS percentages, using `MX`/`MY` margin constants that **mirror but don't share code with** the backend's `_overlay_xy` margins (a drift risk noted in the flags below).
-- The mockup itself is split into a top region (colored per the `background` prop, holding the active placements) and a bottom "gameplay clip" placeholder region, proportioned by the `topFrac` prop (which in turn comes from the currently-selected split's `top` height ÷ 1920).
+- `previewStyle(p)` maps each active placement's `x`/`y`/`full_width` onto CSS percentages, using `MX`/`MY` margin constants that **mirror but don't share code with** the backend's `_overlay_xy` margins (a drift risk noted in the flags below). For a Ken Burns placement, it additionally applies `kenBurnsTransform` (see above) driven by the scrub position.
+- The mockup itself is split into a top region (coloured per the `background` prop, holding the active placements) and a bottom "gameplay clip" placeholder region, proportioned by the `topFrac` prop (which in turn comes from the currently-selected split's `top` height ÷ 1920 — ⚠️ this ratio assumes a 1920-tall canvas and doesn't account for the Phase 5 landscape canvas, where the real frame is only 1080 tall).
+- **Phase 5 fix — full-width images now use `objectFit: cover` + `inset: 0`** (previously `contain` + inset margins) so the preview panel's rendering of a full-width sticker actually matches how `stitch_video.py` covers/crops it in the real render — the commit message calls this out explicitly as "the fix for 'preview images look misaligned vs the video.'" This was a prerequisite for the Ken Burns feature to preview sensibly, but it changed how *all* full-width previews render, Ken Burns or not.
 - Images render via `<img src={uploads.find(u => u.key === p.image)?.url}>` — works identically for local uploads and AI-generated images, since `timelineImages` already normalized both into the same `{key,label,url}` shape.
 
 This gives a rough "what will this actually look like" preview without needing a full render — genuinely useful given how many independent knobs (position, full-width, split, background) now affect final placement.
@@ -168,8 +181,8 @@ This gives a rough "what will this actually look like" preview without needing a
 When a block is selected:
 - **Numeric start/end inputs** (`type="number" step="0.1"`): start clamped `[0, end - MIN_LEN]`, end clamped `[start + MIN_LEN, duration]`, via `round2(clamp(+e.target.value, ...))`. ⚠️ **NaN bug:** in transient invalid states (e.g. the field contains `-` or `e`), `+value` can be `NaN` → `clamp(NaN,…)=NaN` → the placement gets `start:NaN`, breaking its rendered `left/width` until a valid number is typed. Low severity.
 - **Position grid** (3×2): buttons labelled `"upper-left"`, `"upper-center"`, … built by nesting `Y_OPTS.map(y => X_OPTS.map(x => ...))`; clicking sets `{x, y}`. So position is a **6-preset grid, not free pixel placement** — the backend converts these presets to pixels. (Irrelevant when `full_width` is on, since the overlay always spans the full width regardless of `x`.)
-- **Sound effect select + preview** (new) — see above.
-- **Full-width toggle + animation controls** (new) — see above.
+- **Sound effect select + preview** — see above.
+- **Full-width toggle + animation controls** (slide-in OR Ken Burns) + **fit toggle** (new) — see above.
 - **Delete** removes the block and clears selection.
 
 **Soft warnings** (amber, advisory — never block generation): `tooMany` when `placements.length > 5`; `tooShort` for any block under 2s ("may flash by too fast").
@@ -191,22 +204,25 @@ On Generate (in `App.jsx` + `client.js`): the client `id` is stripped (`placemen
 - ⚠️ `imgTrackRef.setPointerCapture` has no optional-chaining/try-catch (can throw `NotFoundError` for an already-up pointer, e.g. pen), while `scrubDown` uses `?.` — inconsistent.
 - ⚠️ NaN via numeric inputs in transient states.
 - ⚠️ Placements survive probe invalidation.
-- `MAX_STICKERS=5` is advisory only; **no backend cap** on sticker count, upload size, or type (the FE `image/*` filter is the only gate) — now also no backend cap on AI-generated image count beyond the `[1,30]` request-level bound.
+- `MAX_STICKERS=5` is advisory only; **no backend cap** on sticker count, upload size, or type (the FE `image/*` filter is the only gate) — now also no backend cap on AI-generated image count beyond the `[1,60]` request-level bound (doubled from 30 in Phase 5).
 - Word chips access `.start/.end` unguarded.
 - Module-level `_idCounter` resets on reload (harmless — placements aren't persisted).
 - Zoom uses ×/÷1.3 with rounding, so repeated in/out doesn't return to exactly the same value (cosmetic).
-- **Performance:** every drag pointermove → `onChange` → `setPlacements` → full App re-render. Acceptable now; memoize first if it grows — the live preview panel adds another render dependency (`cursor`) that fires during the rAF playhead loop too, worth watching if the component ever feels sluggish.
-- ⚠️ **New:** `MX`/`MY` preview-panel margins duplicate the backend's `_overlay_xy` margins with no shared source of truth — if the backend's sticker margin ever changes, this preview silently drifts out of sync with the real output.
-- ⚠️ **New:** `animation_duration` default `0.4` is a literal duplicated between this component (manual block creation) and `App.jsx` (auto-placement for generated images).
+- **Performance:** every drag pointermove → `onChange` → `setPlacements` → full App re-render. Acceptable now; memoize first if it grows — the live preview panel adds another render dependency (`cursor`) that fires during the rAF playhead loop too, worth watching if the component ever feels sluggish. Ken Burns adds a second, separate rAF loop (`kbRaf`) when the motion-preview mini-player is active.
+- ⚠️ `MX`/`MY` preview-panel margins duplicate the backend's `_overlay_xy` margins with no shared source of truth — if the backend's sticker margin ever changes, this preview silently drifts out of sync with the real output.
+- ⚠️ `animation_duration` default `0.4` is a literal duplicated between this component (manual block creation) and `App.jsx` (auto-placement for generated images).
+- ⚠️ **New (Phase 5):** `KB_ZOOM = 1.12` is hardcoded here AND independently in `stitch_video.py` — no shared constant; a change to one without the other would desync the preview from the real render.
+- ⚠️ **New:** the `topFrac` preview-panel ratio still assumes a 1920-tall canvas — it doesn't account for the Phase 5 landscape canvas (1080 tall), so the preview's top/bottom proportions would misrepresent a landscape render.
 - ✅ Still no genuinely dead code in the component itself — every prop, state, and helper is used, including the new ones.
 
 ---
 
 ## Key takeaways
 
-- A fully-controlled Canva-style editor: uploads (now merged with AI-generated images) + placements live in `App`; this component draws the timeline and reports `{id,image,start,end,x,y,full_width,animation,animation_duration,sound_id}`.
+- A fully-controlled Canva-style editor: uploads (now merged with AI-generated images) + placements live in `App`; this component draws the timeline and reports `{id,image,start,end,x,y,full_width,animation,animation_duration,sound_id,image_fit}`.
 - The whole layout is `secToPx`-based absolute positioning; `pxToSec` stays correct under scroll via `getBoundingClientRect`.
 - Three Pointer-Events drag machines (scrub, create, move, trim) plus a rAF playhead and a decoded 900-bucket waveform — all unchanged from the original design.
 - Position is a 6-preset grid (or full-width) the backend turns into pixels/expressions; z-order = array order; captions always render above stickers.
-- New: per-placement sound effects (one more lazily-created `Audio()` instance), a slide-in animation picker (with a CSS-only illustrative preview, decoupled from the real server-side animation), and a live 9:16 preview panel that mirrors — but doesn't share code with — the backend's positioning math.
+- Per-placement sound effects (a third lazily-created `Audio()` instance, alongside VoiceSelect and MusicSelect), a slide-in **or Ken Burns** animation picker (both with CSS-only illustrative previews, decoupled from the real server-side ffmpeg render), a cover/contain fit toggle, and a live preview panel that mirrors — but doesn't share code with — the backend's positioning math.
+- Ken Burns motion reuses the slide-in animation's UI slot (same `animation` field, 4 more allowed values) and gets its own dedicated motion-preview mini-player, separate from the always-visible main preview panel.
 - Traps: double (now effectively triple-pattern) audio handling, NaN numeric inputs, placements surviving probe invalidation, per-pointermove full re-renders, and two new duplicated-constant drift risks (preview margins, animation duration default).

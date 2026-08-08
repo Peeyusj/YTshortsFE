@@ -4,7 +4,7 @@
 
 > This app is a **thin client**. It renders a form from backend data, submits a job, polls until the video appears, and plays it. All real work happens in the backend repo.
 >
-> **Update:** the app grew substantially alongside the backend's Phase 3/4 work — sticker sound effects/animations/full-width mode, a caption-style picker, video intro/outro upload slots, a live 9:16 preview panel in the timeline, per-voice audio previews, and a whole second, optional "auto-generate scene images" flow with its own submit/poll hook. This revision covers all of it.
+> **Update:** the app grew substantially alongside the backend's Phase 3/4 work — sticker sound effects/animations/full-width mode, a caption-style picker, video intro/outro upload slots, a live 9:16 preview panel in the timeline, per-voice audio previews, and a whole second, optional "auto-generate scene images" flow with its own submit/poll hook. **Phase 5 update:** an aspect-ratio picker (`CanvasSelect`, 9:16 vs 16:9), a captions on/off toggle (`CaptionsToggle`), Ken Burns zoom/pan controls added to the sticker editor, and a preview button on `MusicSelect`. This revision covers all of it.
 
 ---
 
@@ -76,7 +76,7 @@ One component owns everything (no context, no reducer). Well over 18 `useState` 
 | `split` | `''` | `split` | backend default fills it |
 | `music` | `''` (=None) | `music` | sent as `null` when `''` |
 | `musicVolume` | `0.18` | `music_volume` | ⚠️ duplicated default (also from backend) |
-| `placements` | `[]` | `stickers` | client `id` stripped before sending; entries now also carry `full_width`/`animation`/`animation_duration`/`sound_id` |
+| `placements` | `[]` | `stickers` | client `id` stripped before sending; entries now also carry `full_width`/`animation` (8 values: 4 slide-in + 4 Ken Burns)/`animation_duration`/`sound_id`/`image_fit` (new — `cover`\|`contain`) |
 | `uploads` | `[]` | (files) | session-only `{key,label,file,url}` |
 | `showOutro` | `true` | `show_outro` | frontend-owned (the static-image outro card, unchanged) |
 
@@ -92,6 +92,8 @@ One component owns everything (no context, no reducer). Well over 18 `useState` 
 | `generatedImages` | `[]` | finished AI images `{key,label,url,start,end}` | feeds `placements`, not sent directly |
 | `introVideo` | `null` | `{key,name,file,url}` intro clip | `intro_video` (key) + `files` |
 | `outroVideo` | `null` | `{key,name,file,url}` outro clip | `outro_video` (key) + `files` |
+| `canvas` (new, Phase 5) | `''` | selected aspect ratio (`vertical`\|`landscape`) | `canvas` |
+| `captionsEnabled` (new, Phase 5) | `true` | burn-in captions on/off | `captions_enabled` |
 | `soundOptions` | `[]` | sound-effect registry for the sticker dropdown | — |
 | `captionStyles` | `[]` | registry for `CaptionStyleSelect` | — |
 | `imageStyles` | `[]` | registry for `AutoImageGenerator` | — |
@@ -109,12 +111,12 @@ One component owns everything (no context, no reducer). Well over 18 `useState` 
 
 ## Effects
 
-**Effect #1 — mount load (now 8 calls, was 5):**
+**Effect #1 — mount load (now 9 calls, was 5):**
 ```js
 Promise.all([getVoices(), getClips(), getSplits(), getMusic(), getHealth(),
-             getSounds(), getCaptionStyles(), getImageStyles()])
+             getSounds(), getCaptionStyles(), getImageStyles(), getCanvases()])
 ```
-On success, sets each option list *and* its default selection (`music: null → ''`, `musicVolume ← default_volume`, and new: `captionStyle`/`imageStyle`/`imageCount`/`imageCountBounds` ← their respective defaults). ⚠️ `Promise.all` is **still all-or-nothing** — now with more calls, more surface area for one failing endpoint to blank the whole form and show the "backend unreachable" banner (which embeds `VITE_API_BASE`). Fires twice under StrictMode dev.
+On success, sets each option list *and* its default selection (`music: null → ''`, `musicVolume ← default_volume`, `captionStyle`/`imageStyle`/`imageCount`/`imageCountBounds` ← their respective defaults, and new: `canvas ← default` ("vertical")). ⚠️ `Promise.all` is **still all-or-nothing** — now with more calls, more surface area for one failing endpoint to blank the whole form and show the "backend unreachable" banner (which embeds `VITE_API_BASE`). Fires twice under StrictMode dev.
 
 **Effect #2 — probe invalidation:** deps `[text, voice, speed, voiceDescription]`. Any change nulls `timelineDuration`/`timelineWords`/`probeId`, re-locking the sticker timeline — because a probe's measured duration is only valid for the exact inputs it measured (`voiceDescription` is included because for Parler a different prompt = different audio = different duration). ⚠️ It fires on **every keystroke** in the script box, and it does **NOT** clear `placements` — so old sticker blocks can outlive the timeline they were drawn against.
 
@@ -138,7 +140,7 @@ On success, sets each option list *and* its default selection (`music: null → 
   - strip client-only `id` from each placement (`placements.map(({id, ...rest}) => rest)`),
   - compute `usedKeys` and send **only** uploads actually referenced by a placement (unplaced uploads never leave the browser) — now also pushes `introVideo`/`outroVideo` into the files array if set,
   - force `voiceDescription: isParler ? voiceDescription : ''`,
-  - add `captionStyle`, `introVideo: introVideo?.key ?? null`, `outroVideo: outroVideo?.key ?? null` to the payload,
+  - add `captionStyle`, `introVideo: introVideo?.key ?? null`, `outroVideo: outroVideo?.key ?? null`, and (new) `canvas`, `captionsEnabled` to the payload,
   - call the hook's `start({...now well over a dozen fields...})`.
 
 ---
@@ -169,8 +171,10 @@ Base URL: `const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:8
 | `generateScenes({...})` (new) | POST /api/scenes/generate (multipart) | `{id}` |
 | `getSceneJob(id)` (new) | GET /api/scenes/{id} | `{id, status, stage, done, total, style, error, scenes}` |
 | `sceneImageUrl(id, name)` (new) | (URL builder) | PNG URL for a generated scene image |
+| `musicAudioUrl(musicId)` (new, Phase 5) | (URL builder) | mp3 URL for music preview |
+| `getCanvases()` (new, Phase 5) | GET /api/canvases | `{canvases, default}` |
 
-Note the growing set of **URL-builder** functions (now 5: `probeAudioUrl`, `videoUrl`, `soundAudioUrl`, `voiceSampleUrl`, `sceneImageUrl`) that return raw URLs for media elements, versus the JSON functions that go through `request()`. The **camelCase↔snake_case** translation happens **only here** (`voiceDescription` → `voice_description`, `captionStyle` → `caption_style`, `introVideo`/`outroVideo` → `intro_video`/`outro_video`, etc.).
+Note the growing set of **URL-builder** functions (now 6: `probeAudioUrl`, `videoUrl`, `soundAudioUrl`, `voiceSampleUrl`, `sceneImageUrl`, `musicAudioUrl`) that return raw URLs for media elements, versus the JSON functions that go through `request()`. The **camelCase↔snake_case** translation happens **only here** (`voiceDescription` → `voice_description`, `captionStyle` → `caption_style`, `introVideo`/`outroVideo` → `intro_video`/`outro_video`, `captionsEnabled` → `captions_enabled`, etc.).
 
 **`createJob` multipart mechanics (now with more fields + intro/outro video files):**
 ```js

@@ -1,16 +1,16 @@
 # Component Reference (YTshortsFE)
 
-**What this covers:** all 14 of the simpler components in `src/components/` (11 unchanged + `VoiceSelect`'s new preview feature + 3 brand-new ones). The big `StickerTimeline` has its own doc: [STICKER-TIMELINE.md](STICKER-TIMELINE.md). **Read first:** [FRONTEND.md](FRONTEND.md) for the `App.jsx` state model these bind to.
+**What this covers:** all 16 of the simpler components in `src/components/` (11 original + `VoiceSelect`'s preview feature + 3 Phase-3/4 additions + 2 Phase-5 additions). The big `StickerTimeline` has its own doc: [STICKER-TIMELINE.md](STICKER-TIMELINE.md). **Read first:** [FRONTEND.md](FRONTEND.md) for the `App.jsx` state model these bind to.
 
 ---
 
-## Shared patterns (mostly still true — two components now break rule 1)
+## Shared patterns (mostly still true — three components now break rule 1)
 
-1. **Stateless & fully controlled, with two new exceptions.** The original components contain no `useState`/`useEffect`/`useRef`. **`VoiceSelect`** and **`IntroOutroVideo`** now have small local state (a preview-playback status enum; nothing structural) — still receive all their real data via props, just manage a UI-only interaction locally rather than lifting it to `App.jsx`. Everything else remains fully controlled.
+1. **Stateless & fully controlled, with a few exceptions.** The original components contain no `useState`/`useEffect`/`useRef`. **`VoiceSelect`**, **`IntroOutroVideo`**, and (new) **`MusicSelect`** now have small local state (a preview-playback status enum / an `Audio()` ref; nothing structural) — still receive all their real data via props, just manage a UI-only interaction locally rather than lifting it to `App.jsx`. Everything else remains fully controlled.
 2. **`disabled` is always `isBusy`** — the whole form freezes during a render.
-3. **Backend-driven options.** No component hardcodes voice/clip/split/music/sound/caption-style/image-style ids — they arrive as props from `App.jsx`'s mount `Promise.all` (now 8 calls). (The one exception: `BackgroundToggle`, whose two options are a fixed frontend list.)
-4. **Dark Tailwind theme** — slate-950 bg, slate-100 text, indigo accent, emerald=success, rose=error, amber=warning. The 3 new components follow the same theme.
-5. **Zero orphans.** All 14 (of the "simple" set) are imported and rendered in `App.jsx`.
+3. **Backend-driven options.** No component hardcodes voice/clip/split/music/sound/caption-style/image-style/canvas ids — they arrive as props from `App.jsx`'s mount `Promise.all` (now 9 calls). (The one exception: `BackgroundToggle`, whose two options are a fixed frontend list.)
+4. **Dark Tailwind theme** — slate-950 bg, slate-100 text, indigo accent, emerald=success, rose=error, amber=warning. All new components follow the same theme.
+5. **Zero orphans.** All 16 (of the "simple" set) are imported and rendered in `App.jsx`.
 
 ---
 
@@ -56,13 +56,27 @@
 ### SplitSelect
 - **Props:** `splits` (each `{id, label, top, bottom}` pixel heights), `value`, `onChange`, `disabled`. "Feature #5".
 - **Renders:** a `<select>` + a tiny two-tone proportion preview bar (top slate = captions, bottom indigo = clip).
-- ⚠️ **Magic number:** `topPct = active ? (active.top / 1920) * 100 : 66.7` — hardcodes **1920** as the total canvas height (duplicated from the backend). If the resolution ever changed, or a split's top+bottom ≠ 1920, the preview would misrepresent proportions. Fallback `66.7` used before options load.
+- ⚠️ **Magic number:** `topPct = active ? (active.top / 1920) * 100 : 66.7` — hardcodes **1920** as the total canvas height (duplicated from the backend), which is now **wrong for a landscape (1920×1080) canvas** — the preview bar's proportions would be nonsensical for the `"full"` split or a landscape render. Fallback `66.7` used before options load.
+- Gained a 5th option in Phase 5: `"full"` (no gameplay clip — top=1920, bottom=0). `App.jsx` disables this component's parent `ClipSelect` when `split === 'full'` (see `CanvasSelect` below).
 
-### MusicSelect
+### CanvasSelect (new, Phase 5)
+- **Props:** `canvases` (`{id,label,width,height}`), `value`, `onChange`, `disabled`.
+- **Renders:** a plain `<select id="canvas">` labeled "Aspect ratio" — structurally identical to `ClipSelect`/`VoiceSelect`.
+- **Wiring:** `App.jsx` disables `ClipSelect` and `SplitSelect` (with an explanatory note) whenever `canvas === 'landscape'`, mirroring the backend's `resolve_canvas_split()` rule that landscape always renders full-screen (no gameplay clip, split ignored). ⚠️ **This rule is duplicated, not derived** — the frontend has its own copy of the same "landscape → always full-screen" logic; if the backend rule ever changes, this check must be updated by hand too. See [../../YTshortsAnimation/docs/06-CONFIG-REGISTRIES.md](../../YTshortsAnimation/docs/06-CONFIG-REGISTRIES.md).
+- ⚠️ Unlike `voice`/`clip`/`split`, `App.jsx`'s `canGenerate` check does **not** require `canvas` to be truthy — harmless in practice (the bootstrap effect always sets a default and the dropdown can't produce an empty value) but an inconsistency with the sibling fields.
+
+### CaptionsToggle (new, Phase 5)
+- **Props:** `value` (bool), `onChange`, `disabled`.
+- **Renders:** a single checkbox, "Burn in subtitles."
+- **Server-side effect:** unlike a purely cosmetic toggle, turning this off makes the backend skip the **entire** captions-generation stage (not just the burn-in step) — a real compute saving, not just a rendering shortcut. See [../../YTshortsAnimation/docs/04-PIPELINE.md](../../YTshortsAnimation/docs/04-PIPELINE.md) §3.
+- **Wiring:** when off, `App.jsx` also disables `CaptionStyleSelect` (`disabled={isBusy || !captionsEnabled}`) — no point picking a style for captions that won't render.
+
+### MusicSelect (extended in Phase 5 — now has a preview button)
 - **Props:** `music` (`{id,label,path,artist,mood,description}`), `value`, `onChange`, `volume`, `onVolumeChange`, `disabled`. The richest option component.
-- **Renders three parts:** (1) a `<select>` with a hardcoded first option "None — narration only" (⚠️ **not** disabled when the list is empty, unlike the others, because "None" is always valid); (2) a metadata panel (artist/mood pill/description) shown **only when a track is selected**; (3) a volume slider shown only when a track is selected.
+- **Renders four parts now:** (1) a `<select>` with a hardcoded first option "None — narration only" (⚠️ **not** disabled when the list is empty, unlike the others, because "None" is always valid) **plus** (new) a ▶/■ preview button beside it; (2) a metadata panel (artist/mood pill/description) shown **only when a track is selected**; (3) a volume slider shown only when a track is selected.
+- **New local state (breaks the "fully controlled" pattern, like `VoiceSelect`):** `audioRef` (a lazily-created `Audio()` element, reused) and `isPlaying`. `togglePreview()` sets `.src = musicAudioUrl(value)` and plays/pauses — same pattern as `VoiceSelect`'s sample button and `StickerTimeline`'s sound-effect preview (three independent copies of the same ~15 lines, no shared hook — see [STICKER-TIMELINE.md](STICKER-TIMELINE.md)). Two effects stop playback when `value` changes (so switching tracks, or picking "None," can't leave a stale preview playing) and on unmount.
 - ⚠️ **Unit conversion:** state is a 0..1 float ("matches the backend"), but the slider works in integer percent — displays `Math.round(volume*100)`, emits `parseInt(...)/100`. Labels "Subtle" / "As loud as voice".
-- **Notes:** defaults from the API (`music: null → ''`, `default_volume`). The `0.18` fallback also appears as the `App.jsx` initial state (duplicated). On generate, `music: music || null`.
+- **Notes:** defaults from the API (`music: null → ''`, `default_volume`). The `0.18` fallback also appears as the `App.jsx` initial state (duplicated). On generate, `music: music || null`. The registry gained 2 tracks in Phase 5 (5 total) — no component changes were needed for that part, since the dropdown already maps over whatever the backend returns.
 
 ### OutroToggle
 - **Props:** `value` (bool), `onChange`, `disabled`, `available` (**tri-state**: true/false/undefined).
@@ -111,11 +125,13 @@
 | `clip` | ClipSelect | `clip` |
 | `background` | BackgroundToggle | `background` |
 | `split` | SplitSelect | `split` |
+| `canvas` (new) | CanvasSelect | `canvas` |
 | `music` + `musicVolume` | MusicSelect | `music` / `music_volume` |
-| `captionStyle` (new) | CaptionStyleSelect | `caption_style` |
+| `captionStyle` | CaptionStyleSelect | `caption_style` |
+| `captionsEnabled` (new) | CaptionsToggle | `captions_enabled` |
 | `showOutro` | OutroToggle | `show_outro` |
-| `introVideo` / `outroVideo` (new) | IntroOutroVideo | `intro_video` / `outro_video` + `files` |
-| `autoImageOn`/`imageStyle`/`imageCount`/`generatedImages` (new) | AutoImageGenerator → merges into `placements` | (indirect — via `stickers[]`) |
+| `introVideo` / `outroVideo` | IntroOutroVideo | `intro_video` / `outro_video` + `files` |
+| `autoImageOn`/`imageStyle`/`imageCount`/`generatedImages` | AutoImageGenerator → merges into `placements` | (indirect — via `stickers[]`) |
 | `placements` + `uploads` + probe state | StickerTimeline → [STICKER-TIMELINE.md](STICKER-TIMELINE.md) | `stickers` + files |
 | `job.stages` | ProgressStages | (read-only) |
 | `job` | VideoResult | (read-only) |
@@ -124,8 +140,9 @@
 
 ## Key takeaways
 
-- 14 "simple" components (12 original + 2 new option pickers) are stateless controlled components; `VoiceSelect` and `IntroOutroVideo` now hold small UI-only local state (preview/upload status) as the two exceptions; `AutoImageGenerator` is a more substantial new component with its own polling hook.
+- 16 "simple" components (12 original + 2 Phase-3/4 pickers + `CanvasSelect`/`CaptionsToggle` in Phase 5) are mostly stateless controlled components; `VoiceSelect`, `IntroOutroVideo`, and (new) `MusicSelect` hold small UI-only local state (preview/upload status) as the exceptions; `AutoImageGenerator` is a more substantial component with its own polling hook.
 - Options are backend-driven except `BackgroundToggle`'s fixed 2-value list.
-- Conditional rendering: `VoiceDescriptionInput` only for Parler; `MusicSelect`'s panel/slider only when a track is picked; `VideoResult` only when done-with-video; `AutoImageGenerator`'s generate button only when a timeline duration exists.
+- Conditional rendering: `VoiceDescriptionInput` only for Parler; `MusicSelect`'s panel/slider only when a track is picked; `VideoResult` only when done-with-video; `AutoImageGenerator`'s generate button only when a timeline duration exists; `CaptionStyleSelect` disabled when `CaptionsToggle` is off.
 - `OutroToggle` (static image) and `IntroOutroVideo` (real video clips) are two independent, simultaneously-usable outro mechanisms — don't confuse them.
-- Watch the small traps: hardcoded 1920 in SplitSelect, hardcoded stage ORDER in ProgressStages, the cross-origin `download` caveat, the emotion-tag table that duplicates backend semantics, `IntroOutroVideo`'s client-unenforced 5s cap, and `AutoImageGenerator`'s hardcoded `15%` progress-bar fallback.
+- `CanvasSelect`'s landscape option triggers a "always full-screen" rule that's duplicated (not shared) between frontend and backend — `ClipSelect`/`SplitSelect` get disabled accordingly.
+- Watch the small traps: hardcoded 1920 in SplitSelect (now also wrong for landscape), hardcoded stage ORDER in ProgressStages, the cross-origin `download` caveat, the emotion-tag table that duplicates backend semantics, `IntroOutroVideo`'s client-unenforced 5s cap, `AutoImageGenerator`'s hardcoded `15%` progress-bar fallback, and three independent copy-pasted `Audio()` preview implementations (VoiceSelect, MusicSelect, StickerTimeline) with no shared hook.

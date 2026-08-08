@@ -7,23 +7,27 @@ The UI is a thin client: it collects options, POSTs a job to the FastAPI backend
 for per-stage progress and finally shows/downloads the rendered `final.mp4`.
 
 > 📚 **Learning the frontend?** See **[`docs/FRONTEND.md`](docs/FRONTEND.md)** (architecture, state model,
-> API client, polling), **[`docs/COMPONENTS.md`](docs/COMPONENTS.md)** (all 15 components), and
+> API client, polling), **[`docs/COMPONENTS.md`](docs/COMPONENTS.md)** (all 16 components), and
 > **[`docs/STICKER-TIMELINE.md`](docs/STICKER-TIMELINE.md)** (the timeline editor deep dive). For the
 > backend and the full system, start at [`../YTshortsAnimation/docs/00-START-HERE.md`](../YTshortsAnimation/docs/00-START-HERE.md).
 
-## Project status (as of 2026-07-20)
+## Project status (as of 2026-08-08)
 
-This UI drives a local, single-user studio that turns a typed script into a finished 9:16 YouTube
-Short — narrated by one of three TTS engines, with word-synced burned captions (in a selectable
-visual style), looping gameplay footage, timed stickers (with slide-in animations and attached
-sound effects), a video intro/outro, background music, and an optional "auto-generate scene
-images" flow that uses an LLM (Groq) to plan images and a second Colab GPU (FLUX) to render them
-directly onto the sticker timeline. It remains a thin client: all of that work happens in the
-sibling [`YTshortsAnimation`](../YTshortsAnimation) backend, this app just renders the form,
-uploads files, and polls two independent job types (renders and image-generation batches) until
-they finish. Current branch is `feature-phase4-generate-image` — `main` is stale. See the backend's
+This UI drives a local, single-user studio that turns a typed script into a finished YouTube Short
+or landscape video — narrated by one of three TTS engines, with word-synced burned captions
+(optional, in a selectable visual style) over a choice of canvas layouts (classic 9:16 split with
+gameplay footage, or full-screen with no gameplay clip at all), timed stickers (including slow
+zoom/pan "Ken Burns" motion, with attached sound effects), a video intro/outro, background music,
+and an optional "auto-generate scene images" flow that uses an LLM (Groq) to plan images and a
+second Colab GPU (FLUX) to render them directly onto the sticker timeline. It remains a thin
+client: all of that work happens in the sibling [`YTshortsAnimation`](../YTshortsAnimation) backend
+— this app just renders the form, uploads files, and polls two independent job types (renders and
+image-generation batches) until they finish. Current branch is `feature-phase-five-full-screen` —
+`main` is stale. See the backend's
 [`docs/09-DEPENDENCIES.md`](../YTshortsAnimation/docs/09-DEPENDENCIES.md) if AI voices or AI images
-aren't working; it's a backend setup step, not anything in this repo.
+aren't working; it's a backend setup step, not anything in this repo. For exactly how the AI voice
+and AI image features run on entirely free infrastructure (Colab + Groq), see **"How this stays
+100% free"** in the [backend README](../YTshortsAnimation/README.md#how-this-stays-100-free).
 
 ## Prerequisites
 
