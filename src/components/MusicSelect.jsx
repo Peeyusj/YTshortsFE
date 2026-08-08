@@ -5,7 +5,12 @@
 //
 // When a track is selected we surface its description/mood/artist (so you know
 // what each bed is for — the "add its other description too" part) and reveal a
-// volume slider that controls how loud the music sits UNDER the voice.
+// volume slider that controls how loud the music sits UNDER the voice. A preview
+// play/pause button (GET /api/music/{id}/audio) lets you hear the track before
+// committing to it — same pattern as VoiceSelect's sample button.
+import { useEffect, useRef, useState } from 'react'
+import { musicAudioUrl } from '../api/client'
+
 export default function MusicSelect({
   music,
   value,
@@ -18,28 +23,68 @@ export default function MusicSelect({
   // Store/emit volume as a 0..1 float (matches the backend); show it as a %.
   const pct = Math.round(volume * 100)
 
+  const audioRef = useRef(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+
+  function togglePreview() {
+    if (!value) return
+    if (!audioRef.current) {
+      audioRef.current = new Audio()
+      audioRef.current.onended = () => setIsPlaying(false)
+      audioRef.current.onerror = () => setIsPlaying(false)
+    }
+    const a = audioRef.current
+    if (isPlaying) {
+      a.pause()
+      setIsPlaying(false)
+      return
+    }
+    a.src = musicAudioUrl(value)
+    a.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
+  }
+
+  // Switching tracks (or turning music off) should stop whatever preview was
+  // playing, so a stale clip never keeps going in the background.
+  useEffect(() => {
+    audioRef.current?.pause()
+    setIsPlaying(false)
+  }, [value])
+  useEffect(() => () => audioRef.current?.pause(), [])
+
   return (
     <div className="space-y-2">
       <label htmlFor="music" className="block text-sm font-medium text-slate-200">
         Background music
       </label>
-      <select
-        id="music"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        disabled={disabled}
-        className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2.5 text-sm
-                   text-slate-100 focus:border-indigo-500 focus:outline-none
-                   focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-      >
-        {/* Empty value = no music. The backend treats null/"" as "no music". */}
-        <option value="">None — narration only</option>
-        {music.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-          </option>
-        ))}
-      </select>
+      <div className="flex items-center gap-2">
+        <select
+          id="music"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          disabled={disabled}
+          className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2.5 text-sm
+                     text-slate-100 focus:border-indigo-500 focus:outline-none
+                     focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+        >
+          {/* Empty value = no music. The backend treats null/"" as "no music". */}
+          <option value="">None — narration only</option>
+          {music.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={togglePreview}
+          disabled={disabled || !value}
+          title={isPlaying ? 'Stop preview' : 'Preview this track'}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-700
+                     text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isPlaying ? '■' : '▶'}
+        </button>
+      </div>
 
       {/* Description panel for the selected track — the "other description" the
           registry carries, shown so you can pick the right vibe at a glance. */}

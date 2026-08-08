@@ -50,6 +50,12 @@ export function getMusic() {
   return request('/api/music')
 }
 
+// Direct URL to a background-music track's raw audio file, for the preview
+// play button — same pattern as soundAudioUrl.
+export function musicAudioUrl(musicId) {
+  return `${API_BASE}/api/music/${musicId}/audio`
+}
+
 // Drives the per-sticker sound-effect dropdown. Returns
 //   { sounds: [{ id, label, path, description }] }
 export function getSounds() {
@@ -89,12 +95,17 @@ export function getImageStyles() {
 // Multipart (same pattern as createJob): a `payload` JSON part + an optional
 // `reference` file part. No Content-Type header — the browser sets the
 // multipart boundary itself for FormData bodies.
-export function generateScenes({ text, duration, style, count, split, canvas, referenceFile = null }) {
+export function generateScenes({
+  text, duration, style, count, split, canvas, words = [], referenceFile = null,
+}) {
   const form = new FormData()
   // `split`/`canvas` (Feature: Full-size image mode + 16:9 support) tell the
   // backend the target aspect so it can request images sized to match instead
   // of a fixed square — see backend/config.py's resolve_canvas_split().
-  form.append('payload', JSON.stringify({ text, duration, style, count, split, canvas }))
+  // `words`: real per-word timestamps from /api/probe — lets the backend anchor
+  // each generated image to the moment its content is actually spoken instead
+  // of an LLM-guessed proportional split (see groq_provider.py).
+  form.append('payload', JSON.stringify({ text, duration, style, count, split, canvas, words }))
   if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
   return request('/api/scenes/generate', { method: 'POST', body: form })
 }

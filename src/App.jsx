@@ -31,6 +31,9 @@ import OutroToggle from './components/OutroToggle'
 import ProgressStages from './components/ProgressStages'
 import VideoResult from './components/VideoResult'
 
+const round2 = (v) => +v.toFixed(2)
+const clamp01 = (v, max) => Math.min(max, Math.max(0, v))
+
 export default function App() {
   // --- form state ---
   const [text, setText] = useState('')
@@ -81,6 +84,16 @@ export default function App() {
   const [probeId, setProbeId] = useState(null)
   const [probing, setProbing] = useState(false)
   const uploadSeq = useRef(0) // monotonic counter for unique upload keys
+  // The duration `placements`/`generatedImages` timestamps are currently valid
+  // for. Speed/voice/description changes shift this (audio gets shorter/longer)
+  // without moving the script content, so on the next successful probe we
+  // rescale existing placements proportionally instead of leaving them at
+  // their old absolute seconds (which is what caused images to drift out of
+  // sync with the narration after changing speed). A text edit changes the
+  // script itself, so old positions are no longer meaningful — those get
+  // cleared instead of rescaled (see the text-change effect below).
+  const referenceDurationRef = useRef(null)
+  const prevTextRef = useRef(text)
 
   const { phase, job, error, isBusy, start, reset } = useGenerationJob()
 
@@ -147,12 +160,52 @@ export default function App() {
     setProbeId(null)
   }, [text, voice, speed, voiceDescription])
 
-  const canGenerate = text.trim().length > 0 && voice && clip && split && !isBusy
+  // Editing the script changes the words themselves, so existing placements'
+  // start/end seconds no longer correspond to anything meaningful (unlike a
+  // speed/voice/description change, which just stretches/compresses the same
+  // content — see the rescale in handleLoadTimeline above). Drop them instead
+  // of silently carrying stale positions into the next render.
+  useEffect(() => {
+    if (prevTextRef.current !== text) {
+      prevTextRef.current = text
+      referenceDurationRef.current = null
+      setPlacements([])
+      setGeneratedImages([])
+    }
+  }, [text])
+
+  // A loaded timeline (`timelineDuration`) is required before placements can
+  // even be created (StickerTimeline hides the editor without it), but
+  // changing speed/voice/description invalidates it while leaving any
+  // already-placed images/scenes in state at their old (now-wrong) seconds.
+  // Block Generate until the timeline is reloaded so a render can never fire
+  // against a duration other than the one the placements were positioned for.
+  const hasStaleTimeline =
+    (placements.length > 0 || generatedImages.length > 0) && timelineDuration == null
+  const canGenerate =
+    text.trim().length > 0 && voice && clip && split && !isBusy && !hasStaleTimeline
 
   function handleLoadTimeline() {
     setProbing(true)
     probeDuration({ text, voice, speed, voiceDescription })
       .then((res) => {
+        // Same script, new duration (speed/voice/description changed since the
+        // last probe): the words moved uniformly with the narration length, so
+        // shift existing placements by the same ratio rather than leaving them
+        // at their old absolute seconds — that mismatch is what let images run
+        // faster/slower than the narration after a speed change.
+        const prevDuration = referenceDurationRef.current
+        if (prevDuration && res.duration && prevDuration !== res.duration) {
+          const ratio = res.duration / prevDuration
+          setPlacements((prev) =>
+            prev.map((p) => ({
+              ...p,
+              start: round2(clamp01(p.start * ratio, res.duration)),
+              end: round2(clamp01(p.end * ratio, res.duration)),
+            })),
+          )
+        }
+        referenceDurationRef.current = res.duration
         setTimelineDuration(res.duration)
         setTimelineWords(res.words ?? [])
         setProbeId(res.probe_id ?? null)
@@ -210,7 +263,7 @@ export default function App() {
         full_width: true,
         animation: 'zoom-in',
         animation_duration: 0.4,
-        sound_id: null,
+        sound_id: 'whoosh_soft',
       }))
       return [...manual, ...auto]
     })
@@ -396,6 +449,7 @@ export default function App() {
               maxCount={imageCountBounds.max}
               text={text}
               duration={timelineDuration}
+              words={timelineWords}
               split={split}
               canvas={canvas}
               disabled={isBusy}
@@ -417,6 +471,12 @@ export default function App() {
               available={health?.outro}
             />
 
+            {hasStaleTimeline && (
+              <p className="text-xs text-amber-300">
+                Speed, voice, or style changed since your images were placed — reload the
+                timeline below so they line up with the new narration before generating.
+              </p>
+            )}
             <button
               onClick={handleGenerate}
               disabled={!canGenerate}

@@ -29,6 +29,8 @@ export default function AutoImageGenerator({
   maxCount = 30,
   text,
   duration, // real narration length in seconds (null until the timeline is loaded)
+  words = [], // real per-word timestamps from /api/probe — anchors image timing to
+  // the actual narration instead of an LLM-guessed proportional split
   split, // current split id (Feature: Full-size image mode) — sets the image request aspect
   canvas, // current canvas id (Feature: 16:9 support) — sets the image request aspect
   disabled, // true while a render job is running
@@ -76,7 +78,7 @@ export default function AutoImageGenerator({
   const canGenerate = enabled && !disabled && !isBusy && text.trim().length > 0 && hasDuration
 
   function handleGenerate() {
-    start({ text, duration, style, count, split, canvas, referenceFile: refImage?.file ?? null })
+    start({ text, duration, style, count, split, canvas, words, referenceFile: refImage?.file ?? null })
   }
 
   return (
@@ -247,6 +249,14 @@ export default function AutoImageGenerator({
             <p className="text-xs text-emerald-400">
               Added {job?.scenes?.length ?? 0} image(s) to the timeline below —
               adjust their timing/position, then Generate the video.
+            </p>
+          )}
+          {/* A "done" job can still carry a warning: the batch stopped short of
+              the requested count (e.g. the free Colab GPU dropped mid-batch) but
+              everything rendered before that point was kept and added above. */}
+          {phase === 'done' && job?.error && (
+            <p className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-200">
+              {job.error}
             </p>
           )}
           {phase === 'error' && (
