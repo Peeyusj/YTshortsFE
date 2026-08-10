@@ -42,6 +42,14 @@ export default function ScriptInput({ value, onChange, speed, disabled }) {
           </span>
         )}
       </div>
+
+      {/* Feature #1: inline emotion tags vary rate/pitch per segment — see the
+          "Voice expression" guide below the textarea for details + a sample. */}
+      <p className="text-xs text-slate-500">
+        Tip: wrap text in <code className="rounded bg-slate-800 px-1">[excited]</code>,{' '}
+        <code className="rounded bg-slate-800 px-1">[sad]</code>, or{' '}
+        <code className="rounded bg-slate-800 px-1">[calm]</code> to change the voice (see guide below).
+      </p>
     </div>
   )
 }
