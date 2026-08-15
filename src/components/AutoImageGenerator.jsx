@@ -14,7 +14,7 @@
 // exactly the point of the toggle.
 
 import { useEffect, useRef, useState } from 'react'
-import { sceneImageUrl } from '../api/client'
+import { sceneImageUrl, suggestImageCount } from '../api/client'
 import { useSceneImages } from '../hooks/useSceneImages'
 
 export default function AutoImageGenerator({
@@ -38,6 +38,34 @@ export default function AutoImageGenerator({
 }) {
   const { phase, job, error, isBusy, start, reset } = useSceneImages()
   const selectedStyle = styles.find((s) => s.id === style) ?? null
+
+  // AI count suggestion: a SEPARATE, explicit step from the count field itself —
+  // the user must see the number and press "Use N" before it overwrites their
+  // count, rather than it silently pre-filling on their behalf.
+  const [suggestion, setSuggestion] = useState(null) // { count, min, max } once fetched
+  const [suggesting, setSuggesting] = useState(false)
+  const [suggestError, setSuggestError] = useState(null)
+
+  async function handleSuggestCount() {
+    setSuggesting(true)
+    setSuggestError(null)
+    setSuggestion(null)
+    try {
+      const hasDur = typeof duration === 'number' && duration > 0
+      const res = await suggestImageCount({ text, duration: hasDur ? duration : null })
+      setSuggestion(res)
+    } catch (err) {
+      setSuggestError(err.message)
+    } finally {
+      setSuggesting(false)
+    }
+  }
+
+  function acceptSuggestion() {
+    if (!suggestion) return
+    onCountChange(suggestion.count)
+    setSuggestion(null)
+  }
 
   // Optional reference image (session-only, lives entirely in this panel):
   // { file, url } or null. When set, the whole batch takes inspiration from it.
@@ -136,9 +164,20 @@ export default function AutoImageGenerator({
 
           {/* Count */}
           <div className="space-y-1.5">
-            <label htmlFor="image-count" className="block text-xs font-medium text-slate-300">
-              How many images ({minCount}–{maxCount})
-            </label>
+            <div className="flex items-center justify-between gap-2">
+              <label htmlFor="image-count" className="block text-xs font-medium text-slate-300">
+                How many images ({minCount}–{maxCount})
+              </label>
+              <button
+                type="button"
+                onClick={handleSuggestCount}
+                disabled={disabled || isBusy || suggesting || text.trim().length === 0}
+                className="text-xs font-medium text-fuchsia-400 hover:text-fuchsia-300
+                           disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {suggesting ? 'Asking AI…' : 'Suggest count from script'}
+              </button>
+            </div>
             <input
               id="image-count"
               type="number"
@@ -155,6 +194,42 @@ export default function AutoImageGenerator({
                          text-slate-100 focus:border-indigo-500 focus:outline-none
                          focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
             />
+
+            {/* Explicit two-step confirm: the suggestion is shown but NOT applied
+                until the user presses "Use N" — it never silently overwrites
+                whatever count they already had. */}
+            {suggestError && (
+              <p className="rounded border border-rose-500/40 bg-rose-500/10 p-2 text-xs text-rose-200">
+                Couldn't get a suggestion: {suggestError}
+              </p>
+            )}
+            {suggestion && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border
+                               border-fuchsia-500/40 bg-fuchsia-500/10 p-2">
+                <p className="text-xs text-fuchsia-100">
+                  AI suggests <span className="font-semibold">{suggestion.count}</span> image
+                  {suggestion.count === 1 ? '' : 's'} for this script.
+                </p>
+                <div className="flex shrink-0 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={acceptSuggestion}
+                    className="rounded bg-fuchsia-600 px-2 py-1 text-xs font-medium text-white
+                               hover:bg-fuchsia-500"
+                  >
+                    Use {suggestion.count}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSuggestion(null)}
+                    className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-300
+                               hover:bg-slate-800"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Optional reference image — the batch takes inspiration from it

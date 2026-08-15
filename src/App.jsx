@@ -5,10 +5,15 @@ import {
   getClips,
   getHealth,
   getImageStyles,
+  getJobProject,
+  getJobTimestamps,
   getMusic,
   getSounds,
   getSplits,
   getVoices,
+  jobAudioUrl,
+  jobStickerUrl,
+  probeAudioUrl,
   probeDuration,
 } from './api/client'
 import { useGenerationJob } from './hooks/useGenerationJob'
@@ -30,6 +35,7 @@ import IntroOutroVideo from './components/IntroOutroVideo'
 import OutroToggle from './components/OutroToggle'
 import ProgressStages from './components/ProgressStages'
 import VideoResult from './components/VideoResult'
+import RecentProjects from './components/RecentProjects'
 
 const round2 = (v) => +v.toFixed(2)
 const clamp01 = (v, max) => Math.min(max, Math.max(0, v))
@@ -63,6 +69,14 @@ export default function App() {
   // Intro/outro VIDEO wraps (session only): each is { key, name, file, url } or null.
   const [introVideo, setIntroVideo] = useState(null)
   const [outroVideo, setOutroVideo] = useState(null)
+  // Recent projects / reopen-for-editing: images reused from a PAST RENDER job,
+  // in the same { key, label, url } shape as generatedImages. `key` is
+  // "job:<oldJobId>/<filename>" — the backend copies the file in at re-render
+  // time (see pipeline.py's _resolve_sticker_image), so these never need
+  // re-uploading. restoredAudioUrl is the past job's narration mp3, for the
+  // voice-strip playback/waveform when no fresh probe has been done.
+  const [restoredImages, setRestoredImages] = useState([])
+  const [restoredAudioUrl, setRestoredAudioUrl] = useState(null)
 
   // --- options loaded from the backend ---
   const [voices, setVoices] = useState([])
@@ -94,6 +108,12 @@ export default function App() {
   // cleared instead of rescaled (see the text-change effect below).
   const referenceDurationRef = useRef(null)
   const prevTextRef = useRef(text)
+  // Recent projects / reopen-for-editing: handleLoadProject sets both of these
+  // right before calling setText/setVoice/etc, so the two invalidation effects
+  // below (which exist to clear stale state after a MANUAL edit) skip exactly
+  // one cycle instead of immediately wiping the state that was just restored.
+  const restoringRef = useRef(false)
+  const skipDurationResetRef = useRef(false)
 
   const { phase, job, error, isBusy, start, reset } = useGenerationJob()
 
@@ -155,9 +175,18 @@ export default function App() {
   // voiceDescription is included because for Parler a different prompt = different
   // audio = different duration.
   useEffect(() => {
+    // Skipped exactly once right after handleLoadProject restores a past
+    // project's own duration/words/audio — those ARE valid for the
+    // text/voice/speed/description that was just set, so this invalidation
+    // (meant for a subsequent MANUAL edit) doesn't apply to that render.
+    if (skipDurationResetRef.current) {
+      skipDurationResetRef.current = false
+      return
+    }
     setTimelineDuration(null)
     setTimelineWords([])
     setProbeId(null)
+    setRestoredAudioUrl(null)
   }, [text, voice, speed, voiceDescription])
 
   // Editing the script changes the words themselves, so existing placements'
@@ -166,11 +195,20 @@ export default function App() {
   // content — see the rescale in handleLoadTimeline above). Drop them instead
   // of silently carrying stale positions into the next render.
   useEffect(() => {
+    // Skipped exactly once right after handleLoadProject sets `text` — the
+    // placements it just restored ARE meaningful for that text, so don't clear
+    // them; just resync the "previous text" baseline for the next real edit.
+    if (restoringRef.current) {
+      restoringRef.current = false
+      prevTextRef.current = text
+      return
+    }
     if (prevTextRef.current !== text) {
       prevTextRef.current = text
       referenceDurationRef.current = null
       setPlacements([])
       setGeneratedImages([])
+      setRestoredImages([])
     }
   }, [text])
 
@@ -214,6 +252,72 @@ export default function App() {
       .finally(() => setProbing(false))
   }
 
+  // Recent projects / reopen-for-editing: repopulate the ENTIRE editor state from
+  // a past render's resolved settings (GET /api/jobs/{id}/project) + its real
+  // measured timeline (GET /api/jobs/{id}/timestamps) — no fresh /api/probe call,
+  // so reopening a project never resynthesizes the narration. Throws on failure so
+  // the RecentProjects picker (which awaits this) can show the error itself.
+  async function handleLoadProject(id) {
+    const [project, timestamps] = await Promise.all([getJobProject(id), getJobTimestamps(id)])
+
+    // Both invalidation effects below react to the setters this triggers; skip
+    // their "clear stale state" behaviour for exactly the render this causes.
+    restoringRef.current = true
+    skipDurationResetRef.current = true
+
+    setText(project.text)
+    setVoice(project.voice)
+    setVoiceDescription(project.voice_description || '')
+    setSpeed(project.speed)
+    setClip(project.clip)
+    setBackground(project.background)
+    if (project.split) setSplit(project.split)
+    if (project.canvas) setCanvas(project.canvas)
+    setMusic(project.music || '')
+    setMusicVolume(project.music_volume)
+    if (project.caption_style) setCaptionStyle(project.caption_style)
+    setCaptionsEnabled(project.captions_enabled)
+    setShowOutro(project.show_outro)
+
+    referenceDurationRef.current = timestamps.duration ?? null
+    prevTextRef.current = project.text
+    setTimelineDuration(timestamps.duration ?? null)
+    setTimelineWords(timestamps.words ?? [])
+    setProbeId(null)
+    setRestoredAudioUrl(jobAudioUrl(id))
+
+    // Rebuild placements from the resolved sticker list. Each image is referenced
+    // via a "job:<id>/<file>" key — the backend copies the file in at re-render
+    // time (pipeline.py's _resolve_sticker_image), so nothing needs re-uploading.
+    const images = []
+    const restored = (project.stickers || []).map((s, i) => {
+      const key = `job:${id}/${s.image}`
+      images.push({ key, label: s.image, url: jobStickerUrl(id, s.image) })
+      return { id: `restored-${i}`, ...s, image: key }
+    })
+    setPlacements(restored)
+    setRestoredImages(images)
+
+    setIntroVideo(
+      project.intro_video
+        ? {
+            key: `job:${id}/${project.intro_video}`,
+            name: project.intro_video,
+            url: jobStickerUrl(id, project.intro_video),
+          }
+        : null,
+    )
+    setOutroVideo(
+      project.outro_video
+        ? {
+            key: `job:${id}/${project.outro_video}`,
+            name: project.outro_video,
+            url: jobStickerUrl(id, project.outro_video),
+          }
+        : null,
+    )
+  }
+
   // Feature #3: add uploaded images to session state. Each gets a unique `key`
   // (used as both the placement reference and the filename sent to the backend),
   // a human label, the File object (sent on generate), and an object URL preview.
@@ -231,6 +335,13 @@ export default function App() {
     // there; everything else is a user upload.
     if (String(key).startsWith('generated:')) {
       setGeneratedImages((prev) => prev.filter((g) => g.key !== key))
+      setPlacements((prev) => prev.filter((p) => p.image !== key))
+      return
+    }
+    // Images reused from a past render (Recent projects) — same shape as
+    // generated images, no object URL to revoke.
+    if (String(key).startsWith('job:')) {
+      setRestoredImages((prev) => prev.filter((r) => r.key !== key))
       setPlacements((prev) => prev.filter((p) => p.image !== key))
       return
     }
@@ -270,15 +381,17 @@ export default function App() {
   }
 
   // What the timeline shows as placeable/previewable images: user uploads PLUS
-  // generated images (in the same { key, label, url } shape). Generated entries
-  // carry no File, so they're excluded from the multipart upload in handleGenerate
-  // (which reads from `uploads`, not this merged list).
+  // generated images PLUS images reused from a past render (in the same
+  // { key, label, url } shape). Neither of the latter two carry a File, so
+  // they're excluded from the multipart upload in handleGenerate (which reads
+  // from `uploads`, not this merged list).
   const timelineImages = useMemo(
     () => [
       ...uploads,
       ...generatedImages.map((g) => ({ key: g.key, label: g.label, url: g.url })),
+      ...restoredImages,
     ],
-    [uploads, generatedImages],
+    [uploads, generatedImages, restoredImages],
   )
 
   // Intro/outro video slots. Build a session upload record (unique key = the
@@ -313,9 +426,11 @@ export default function App() {
     const usedKeys = new Set(placements.map((p) => p.image))
     const files = uploads.filter((u) => usedKeys.has(u.key))
     // Intro/outro clips ride in the same `files` part (keyed by their filename);
-    // the payload references them by that key via intro_video/outro_video.
-    if (introVideo) files.push(introVideo)
-    if (outroVideo) files.push(outroVideo)
+    // the payload references them by that key via intro_video/outro_video. A
+    // restored (Recent projects) intro/outro has no `.file` — it's reused
+    // server-side via its "job:<id>/<file>" key instead of being re-uploaded.
+    if (introVideo?.file) files.push(introVideo)
+    if (outroVideo?.file) files.push(outroVideo)
     // Only send a description for Parler voices; edge ignores it anyway.
     start({
       text,
@@ -342,12 +457,19 @@ export default function App() {
   // estimate is only a pre-generation hint.
   const measured = job?.duration ?? null
 
+  // The voice strip's audio source: a live probe if one's been taken, else a
+  // restored past-render's narration (Recent projects), else nothing.
+  const audioSrc = probeId ? probeAudioUrl(probeId) : restoredAudioUrl
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-7xl px-4 py-8">
-        <header className="mb-6">
-          <h1 className="text-xl font-semibold">Shorts Studio</h1>
-          <p className="text-sm text-slate-400">Turn a script into a 9:16 short.</p>
+        <header className="mb-6 flex items-start justify-between gap-3">
+          <div>
+            <h1 className="text-xl font-semibold">Shorts Studio</h1>
+            <p className="text-sm text-slate-400">Turn a script into a 9:16 short.</p>
+          </div>
+          <RecentProjects onLoad={handleLoadProject} disabled={isBusy} />
         </header>
 
         {/* Backend unreachable — nothing else will work, so say so loudly. */}
@@ -541,7 +663,7 @@ export default function App() {
           <StickerTimeline
             duration={timelineDuration}
             words={timelineWords}
-            probeId={probeId}
+            audioSrc={audioSrc}
             loading={probing}
             onLoadTimeline={handleLoadTimeline}
             uploads={timelineImages}

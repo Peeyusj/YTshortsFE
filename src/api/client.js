@@ -88,6 +88,18 @@ export function getImageStyles() {
   return request('/api/image-styles')
 }
 
+// Ask the LLM how many scene images would suit this script — purely advisory,
+// shown to the user BEFORE they commit to a count. `duration` (seconds, from
+// probeDuration()) is optional; the suggestion still works from script length
+// alone if the timeline hasn't been loaded yet. Returns { count, min_count, max_count }.
+export function suggestImageCount({ text, duration }) {
+  return request('/api/scenes/suggest-count', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, duration: duration || null }),
+  })
+}
+
 // Kick off AI scene-image generation. `duration` is the real narration length in
 // SECONDS from probeDuration(). `referenceFile` (optional File) is an image the
 // whole batch takes inspiration from. Returns { id }; poll getSceneJob(id).
@@ -225,4 +237,37 @@ export function getJob(id) {
 // <a download> href. The browser streams the mp4 from the backend.
 export function videoUrl(id) {
   return `${API_BASE}/api/jobs/${id}/video`
+}
+
+// --- Recent projects / reopen-for-editing -----------------------------------
+// The last KEEP_LAST_N_RENDER_JOBS successfully-finished renders. Returns
+//   [{ id, text_preview, created_at, duration, has_video }, ...] newest first.
+export function getRecentJobs() {
+  return request('/api/jobs')
+}
+
+// The resolved settings a past render was made with (pipeline.py's project.json).
+// Used to repopulate the editor when the user picks a job from "Recent projects".
+export function getJobProject(id) {
+  return request(`/api/jobs/${id}/project`)
+}
+
+// The real measured duration + per-word timings from a past render — lets a
+// restored project populate the timeline WITHOUT a fresh /api/probe call (no
+// resynthesis just to reopen a project). Returns { duration, words }.
+export function getJobTimestamps(id) {
+  return request(`/api/jobs/${id}/timestamps`)
+}
+
+// Direct URL to a past render's narration mp3, for the restored voice-strip
+// playback/waveform — same pattern as probeAudioUrl.
+export function jobAudioUrl(id) {
+  return `${API_BASE}/api/jobs/${id}/audio`
+}
+
+// Direct URL to a file in a past render's stickers/ dir (uploaded image, AI image
+// copy, or intro/outro video) — used to preview a restored placement's image
+// without re-uploading it.
+export function jobStickerUrl(id, name) {
+  return `${API_BASE}/api/jobs/${id}/stickers/${name}`
 }

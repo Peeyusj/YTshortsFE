@@ -25,7 +25,7 @@
 // is the upload's unique `key`. That output shape is UNCHANGED from before, so the
 // backend/stitch contract is untouched — this is purely a richer editing surface.
 import { useEffect, useRef, useState } from 'react'
-import { probeAudioUrl, soundAudioUrl } from '../api/client'
+import { soundAudioUrl } from '../api/client'
 
 const X_OPTS = ['left', 'center', 'right']
 const Y_OPTS = ['upper', 'lower']
@@ -119,7 +119,7 @@ const fmtTick = (t) =>
 export default function StickerTimeline({
   duration,
   words = [],
-  probeId,
+  audioSrc,
   loading,
   onLoadTimeline,
   uploads,
@@ -155,7 +155,6 @@ export default function StickerTimeline({
 
   const secToPx = (s) => s * pps
   const totalW = duration ? Math.max(secToPx(duration), 320) : 0
-  const audioSrc = probeId ? probeAudioUrl(probeId) : null
 
   // ---- upload handling (unchanged behaviour) --------------------------------
   function handleFiles(fileList) {
@@ -173,11 +172,12 @@ export default function StickerTimeline({
   }
 
   // ---- audio: playback + playhead -------------------------------------------
-  // New narration (probeId change) => stop and rewind.
+  // New narration (audio source change — a fresh probe, or a restored project's
+  // past audio) => stop and rewind.
   useEffect(() => {
     setPlaying(false)
     setCursor(0)
-  }, [probeId])
+  }, [audioSrc])
 
   // Smoothly follow the audio while it plays (timeupdate is too coarse for a
   // playhead). Runs only while `playing`, so it costs nothing when paused.
@@ -224,16 +224,16 @@ export default function StickerTimeline({
     scrubbing.current = false
   }
 
-  // ---- waveform: fetch the probe audio, decode, reduce to peak buckets -------
+  // ---- waveform: fetch the audio, decode, reduce to peak buckets -------------
   useEffect(() => {
-    if (!probeId || !duration) {
+    if (!audioSrc || !duration) {
       setPeaks(null)
       return
     }
     let cancelled = false
     ;(async () => {
       try {
-        const resp = await fetch(probeAudioUrl(probeId))
+        const resp = await fetch(audioSrc)
         const buf = await resp.arrayBuffer()
         const AC = window.AudioContext || window.webkitAudioContext
         const ctx = new AC()
@@ -264,7 +264,7 @@ export default function StickerTimeline({
     return () => {
       cancelled = true
     }
-  }, [probeId, duration])
+  }, [audioSrc, duration])
 
   // Paint the waveform whenever peaks or the strip width (zoom) change.
   useEffect(() => {
