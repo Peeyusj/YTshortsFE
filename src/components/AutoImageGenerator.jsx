@@ -16,6 +16,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { sceneImageUrl, suggestImageCount } from '../api/client'
 import { useSceneImages } from '../hooks/useSceneImages'
+import CharacterSelect from './CharacterSelect'
 
 export default function AutoImageGenerator({
   enabled,
@@ -33,6 +34,9 @@ export default function AutoImageGenerator({
   // the actual narration instead of an LLM-guessed proportional split
   split, // current split id (Feature: Full-size image mode) — sets the image request aspect
   canvas, // current canvas id (Feature: 16:9 support) — sets the image request aspect
+  characters = [], // saved characters (GET /api/characters) — see CharacterLibrary.jsx
+  characterId, // currently selected saved character id ('' = none)
+  onCharacterChange,
   disabled, // true while a render job is running
   onImagesReady,
 }) {
@@ -106,7 +110,14 @@ export default function AutoImageGenerator({
   const canGenerate = enabled && !disabled && !isBusy && text.trim().length > 0 && hasDuration
 
   function handleGenerate() {
-    start({ text, duration, style, count, split, canvas, words, referenceFile: refImage?.file ?? null })
+    start({
+      text, duration, style, count, split, canvas, words,
+      // An ad-hoc uploaded reference always wins server-side, so it's safe to
+      // send both — but the picker below already hides one when the other is
+      // in use, so in practice only one is ever set at a time.
+      referenceFile: refImage?.file ?? null,
+      characterId: characterId || null,
+    })
   }
 
   return (
@@ -232,8 +243,21 @@ export default function AutoImageGenerator({
             )}
           </div>
 
+          {/* Saved character (persistent — see CharacterLibrary.jsx). Picking one
+              uses its saved reference image + description for the whole batch,
+              instead of a one-off upload below. */}
+          <CharacterSelect
+            characters={characters}
+            value={characterId}
+            onChange={onCharacterChange}
+            disabled={disabled || isBusy}
+          />
+
           {/* Optional reference image — the batch takes inspiration from it
-              (subject/style). Fully skippable: leave empty for pure text-to-image. */}
+              (subject/style). Fully skippable: leave empty for pure text-to-image.
+              Hidden once a saved character is selected above — that already
+              supplies a reference, so showing both would be confusing. */}
+          {!characterId && (
           <div className="space-y-1.5">
             <label className="block text-xs font-medium text-slate-300">
               Reference image <span className="text-slate-500">(optional)</span>
@@ -278,6 +302,7 @@ export default function AutoImageGenerator({
               </div>
             )}
           </div>
+          )}
 
           {/* Load-timeline hint: scene timings need the real narration length. */}
           {!hasDuration && (

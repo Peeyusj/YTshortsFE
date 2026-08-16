@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCanvases,
   getCaptionStyles,
+  getCharacters,
   getClips,
   getHealth,
   getImageStyles,
@@ -29,6 +30,7 @@ import CanvasSelect from './components/CanvasSelect'
 import MusicSelect from './components/MusicSelect'
 import CaptionStyleSelect from './components/CaptionStyleSelect'
 import CaptionsToggle from './components/CaptionsToggle'
+import CharacterLibrary from './components/CharacterLibrary'
 import AutoImageGenerator from './components/AutoImageGenerator'
 import StickerTimeline from './components/StickerTimeline'
 import IntroOutroVideo from './components/IntroOutroVideo'
@@ -65,6 +67,12 @@ export default function App() {
   const [imageCount, setImageCount] = useState(5)
   const [imageCountBounds, setImageCountBounds] = useState({ min: 1, max: 30 })
   const [generatedImages, setGeneratedImages] = useState([])
+  // Persistent character library (backend/characters.py): saved once, reused
+  // across any future AI scene-image batch. `imageCharacterId` is the one
+  // currently selected for the NEXT generation (see AutoImageGenerator's
+  // CharacterSelect); '' = none, fall back to a one-off reference upload.
+  const [characters, setCharacters] = useState([])
+  const [imageCharacterId, setImageCharacterId] = useState('')
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
   // Intro/outro VIDEO wraps (session only): each is { key, name, file, url } or null.
   const [introVideo, setIntroVideo] = useState(null)
@@ -164,6 +172,19 @@ export default function App() {
         ),
       )
   }, [])
+
+  // Persistent character library — loaded separately from the big Promise.all
+  // above (it's independent of the rest of that startup fetch, and needs to be
+  // re-callable after a create/delete in CharacterLibrary, unlike the one-shot
+  // options loaded on mount only).
+  const refreshCharacters = useCallback(() => {
+    return getCharacters()
+      .then((data) => setCharacters(data.characters ?? []))
+      .catch(() => {}) // best-effort — the panel/select just show an empty list
+  }, [])
+  useEffect(() => {
+    refreshCharacters()
+  }, [refreshCharacters])
 
   // The selected voice's registry entry. Its `engine` decides whether the Parler
   // style-prompt box is shown; `default_description` is the placeholder for it.
@@ -559,6 +580,12 @@ export default function App() {
               onChange={setCaptionsEnabled}
               disabled={isBusy}
             />
+            <CharacterLibrary
+              characters={characters}
+              styles={imageStyles}
+              disabled={isBusy}
+              onChanged={refreshCharacters}
+            />
             <AutoImageGenerator
               enabled={autoImageOn}
               onToggle={setAutoImageOn}
@@ -574,6 +601,9 @@ export default function App() {
               words={timelineWords}
               split={split}
               canvas={canvas}
+              characters={characters}
+              characterId={imageCharacterId}
+              onCharacterChange={setImageCharacterId}
               disabled={isBusy}
               onImagesReady={handleGeneratedImages}
             />

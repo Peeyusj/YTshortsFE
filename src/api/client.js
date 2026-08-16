@@ -102,13 +102,16 @@ export function suggestImageCount({ text, duration }) {
 
 // Kick off AI scene-image generation. `duration` is the real narration length in
 // SECONDS from probeDuration(). `referenceFile` (optional File) is an image the
-// whole batch takes inspiration from. Returns { id }; poll getSceneJob(id).
+// whole batch takes inspiration from. `characterId` (optional, from
+// getCharacters()) picks a saved character's reference + description instead —
+// ignored if `referenceFile` is also set (an ad-hoc upload wins). Returns
+// { id }; poll getSceneJob(id).
 //
 // Multipart (same pattern as createJob): a `payload` JSON part + an optional
 // `reference` file part. No Content-Type header — the browser sets the
 // multipart boundary itself for FormData bodies.
 export function generateScenes({
-  text, duration, style, count, split, canvas, words = [], referenceFile = null,
+  text, duration, style, count, split, canvas, words = [], referenceFile = null, characterId = null,
 }) {
   const form = new FormData()
   // `split`/`canvas` (Feature: Full-size image mode + 16:9 support) tell the
@@ -117,7 +120,10 @@ export function generateScenes({
   // `words`: real per-word timestamps from /api/probe — lets the backend anchor
   // each generated image to the moment its content is actually spoken instead
   // of an LLM-guessed proportional split (see groq_provider.py).
-  form.append('payload', JSON.stringify({ text, duration, style, count, split, canvas, words }))
+  form.append(
+    'payload',
+    JSON.stringify({ text, duration, style, count, split, canvas, words, character_id: characterId }),
+  )
   if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
   return request('/api/scenes/generate', { method: 'POST', body: form })
 }
@@ -135,6 +141,41 @@ export function getSceneJob(id) {
 // which the backend resolves at render time.
 export function sceneImageUrl(id, name) {
   return `${API_BASE}/api/scenes/${id}/images/${name}`
+}
+
+// --- Persistent character library -------------------------------------------
+// Save a recurring character (mascot) ONCE — master reference image +
+// description — and reuse it across any future AI scene-image generation via
+// generateScenes({ characterId }) instead of re-uploading a reference per job.
+
+// Drives the character picker. Returns
+//   { characters: [{ id, name, description, style, seed, source, image_url, created_at }] }
+export function getCharacters() {
+  return request('/api/characters')
+}
+
+// Save a new character. Either upload your own master reference image
+// (`imageFile`, e.g. from Midjourney) or omit it to have the backend render
+// ONE image from `description` (+ `style`) via the configured image
+// provider — same free-Colab-T4 path as scene-image generation, so this can
+// take ~15-45s. Returns the saved CharacterOut.
+//
+// Multipart (same pattern as generateScenes): a `payload` JSON part + an
+// optional `image` file part.
+export function createCharacter({ name, description, style, seed = null, imageFile = null }) {
+  const form = new FormData()
+  form.append('payload', JSON.stringify({ name, description, style, seed }))
+  if (imageFile) form.append('image', imageFile, imageFile.name)
+  return request('/api/characters', { method: 'POST', body: form })
+}
+
+export function deleteCharacter(id) {
+  return request(`/api/characters/${id}`, { method: 'DELETE' })
+}
+
+// Absolute URL to a saved character's master reference PNG.
+export function characterImageUrl(id) {
+  return `${API_BASE}/api/characters/${id}/image`
 }
 
 // Run ONLY the voice stage to measure the real narration, so the Canva-like
