@@ -52,8 +52,13 @@ export default function CaptionStyleSelect({ styles, value, onChange, background
             style={{
               fontFamily: selected.font,
               fontWeight: selected.bold ? 900 : 400,
-              color: previewColor,
-              WebkitTextStroke: `1.5px ${previewOutline}`,
+              // "Bold Box"-style presets (box: true) render a solid fill box
+              // behind the text server-side (libass BorderStyle=3) instead of
+              // an outline+shadow — approximate that here with a background
+              // colour instead of a text-stroke, so the preview matches.
+              ...(selected.box
+                ? { color: previewColor, backgroundColor: previewOutline, borderRadius: 6 }
+                : { color: previewColor, WebkitTextStroke: `1.5px ${previewOutline}` }),
             }}
           >
             Sample Caption

@@ -68,9 +68,16 @@ export function soundAudioUrl(soundId) {
 }
 
 // Drives the caption font/colour preset picker. Returns
-//   { styles: [{ id, label, font, font_size, bold, primary, outline, description }], default }
+//   { styles: [{ id, label, font, font_size, bold, primary, outline, box, description }], default }
 export function getCaptionStyles() {
   return request('/api/caption-styles')
+}
+
+// Drives the caption vertical-position picker (Feature: adjustable caption
+// placement). Returns
+//   { positions: [{ id, label, y_fraction, description }], default }
+export function getCaptionPositions() {
+  return request('/api/caption-positions')
 }
 
 // Direct URL to a voice's cached short demo sample, for the voice preview
@@ -223,6 +230,7 @@ export function createJob({
   music,
   musicVolume,
   captionStyle,
+  captionPosition,
   captionsEnabled = true,
   introVideo = null,
   outroVideo = null,
@@ -255,6 +263,9 @@ export function createJob({
       music_volume: musicVolume,
       // Caption style preset registry id (font/size/weight/colours).
       caption_style: captionStyle,
+      // Caption vertical position registry id (Feature: adjustable caption
+      // placement — top/center/bottom within the caption region).
+      caption_position: captionPosition,
       // Subtitle on/off toggle. Off skips the captions pipeline stage entirely
       // on the backend, not just the burn-in.
       captions_enabled: captionsEnabled,

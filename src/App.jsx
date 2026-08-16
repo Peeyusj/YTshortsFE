@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCanvases,
+  getCaptionPositions,
   getCaptionStyles,
   getCharacters,
   getClips,
@@ -29,6 +30,7 @@ import SplitSelect from './components/SplitSelect'
 import CanvasSelect from './components/CanvasSelect'
 import MusicSelect from './components/MusicSelect'
 import CaptionStyleSelect from './components/CaptionStyleSelect'
+import CaptionPositionSelect from './components/CaptionPositionSelect'
 import CaptionsToggle from './components/CaptionsToggle'
 import CharacterLibrary from './components/CharacterLibrary'
 import AutoImageGenerator from './components/AutoImageGenerator'
@@ -55,6 +57,7 @@ export default function App() {
   const [music, setMusic] = useState('') // background music id ('' = none)
   const [musicVolume, setMusicVolume] = useState(0.18) // 0..1, under the voice
   const [captionStyle, setCaptionStyle] = useState('') // caption font/colour preset id
+  const [captionPosition, setCaptionPosition] = useState('') // caption top/center/bottom placement id
   const [captionsEnabled, setCaptionsEnabled] = useState(true) // subtitle burn-in, on by default
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
@@ -94,6 +97,7 @@ export default function App() {
   const [musicOptions, setMusicOptions] = useState([])
   const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
   const [captionStyles, setCaptionStyles] = useState([])
+  const [captionPositions, setCaptionPositions] = useState([])
   const [imageStyles, setImageStyles] = useState([]) // AI image styles
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
@@ -136,10 +140,11 @@ export default function App() {
       getMusic(),
       getSounds(),
       getCaptionStyles(),
+      getCaptionPositions(),
       getImageStyles(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, imageStyleData, healthData]) => {
+      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, imageStyleData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -155,6 +160,8 @@ export default function App() {
         setSoundOptions(soundData.sounds ?? [])
         setCaptionStyles(captionStyleData.styles ?? [])
         setCaptionStyle(captionStyleData.default ?? '')
+        setCaptionPositions(captionPositionData.positions ?? [])
+        setCaptionPosition(captionPositionData.default ?? '')
         // AI image styles + count bounds (feature is off by default via the toggle).
         setImageStyles(imageStyleData.styles ?? [])
         setImageStyle(imageStyleData.default ?? '')
@@ -297,6 +304,7 @@ export default function App() {
     setMusic(project.music || '')
     setMusicVolume(project.music_volume)
     if (project.caption_style) setCaptionStyle(project.caption_style)
+    if (project.caption_position) setCaptionPosition(project.caption_position)
     setCaptionsEnabled(project.captions_enabled)
     setShowOutro(project.show_outro)
 
@@ -467,6 +475,7 @@ export default function App() {
       music,
       musicVolume,
       captionStyle,
+      captionPosition,
       captionsEnabled,
       introVideo: introVideo?.key ?? null,
       outroVideo: outroVideo?.key ?? null,
@@ -567,6 +576,12 @@ export default function App() {
               volume={musicVolume}
               onVolumeChange={setMusicVolume}
               disabled={isBusy}
+            />
+            <CaptionPositionSelect
+              positions={captionPositions}
+              value={captionPosition}
+              onChange={setCaptionPosition}
+              disabled={isBusy || !captionsEnabled}
             />
             <CaptionStyleSelect
               styles={captionStyles}
