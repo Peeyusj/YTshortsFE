@@ -37,6 +37,7 @@ export default function AutoImageGenerator({
   characters = [], // saved characters (GET /api/characters) — see CharacterLibrary.jsx
   characterId, // currently selected saved character id ('' = none)
   onCharacterChange,
+  generatedAspect = null, // { canvas, split } the existing images were generated for
   imageProviders = [], // GET /api/image-providers — which backends render the images
   imageProvider, // currently selected provider id ('' = server default)
   onImageProviderChange,
@@ -53,6 +54,14 @@ export default function AutoImageGenerator({
   // guess from the output alone — so say it up front rather than after 40 images.
   const referenceIgnored =
     Boolean(characterId) && selectedProvider && selectedProvider.supports_reference === false
+
+  // Generated images are baked at the aspect ratio selected at generation time.
+  // Switching canvas/split afterwards doesn't re-render them — stitch_video just
+  // cover-crops them to the new frame, which is the "my 16:9 images don't fit"
+  // symptom. Detectable, so say it rather than letting it surprise someone.
+  const aspectStale =
+    generatedAspect &&
+    (generatedAspect.canvas !== canvas || generatedAspect.split !== split)
 
   // AI count suggestion: a SEPARATE, explicit step from the count field itself —
   // the user must see the number and press "Use N" before it overwrites their
@@ -160,6 +169,19 @@ export default function AutoImageGenerator({
 
       {enabled && (
         <div className="space-y-3">
+          {/* Stale-aspect warning. Generated images are baked at the aspect
+              selected when they were made; changing canvas/split afterwards
+              silently cover-crops them at render time instead of re-rendering. */}
+          {aspectStale && (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-2
+                          text-xs text-amber-300">
+              Your existing images were generated for a different frame shape
+              ({generatedAspect.canvas} / {generatedAspect.split}) than the one
+              selected now ({canvas} / {split}). They’ll be cropped to fit.
+              Re-generate to get images made for this shape.
+            </p>
+          )}
+
           {/* Image provider — WHICH backend renders these images. Unconfigured
               backends are disabled with the reason inline, so a missing API key
               is visible here instead of surfacing as a failed job later. */}

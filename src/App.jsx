@@ -102,6 +102,8 @@ export default function App() {
   const [imageStyles, setImageStyles] = useState([]) // AI image styles
   // Which backend renders the AI images (GET /api/image-providers).
   // '' until loaded, then the server's default — usually the resilient chain.
+  // { canvas, split } the current generated images were rendered for, or null.
+  const [generatedAspect, setGeneratedAspect] = useState(null)
   const [imageProviders, setImageProviders] = useState([])
   const [imageProvider, setImageProvider] = useState('')
   const [health, setHealth] = useState(null)
@@ -397,6 +399,10 @@ export default function App() {
   // manually-placed images untouched. The user then reviews/adjusts/deletes.
   function handleGeneratedImages(images) {
     setGeneratedImages(images)
+    // Images are baked at the aspect ratio that was selected when they were
+    // generated. Remember it so we can warn if the canvas/split is changed
+    // afterwards - otherwise the render silently crops them to fit.
+    setGeneratedAspect({ canvas, split })
     setPlacements((prev) => {
       const manual = prev.filter((p) => !String(p.image).startsWith('generated:'))
       const auto = images.map((img) => ({
@@ -628,6 +634,7 @@ export default function App() {
               characters={characters}
               characterId={imageCharacterId}
               onCharacterChange={setImageCharacterId}
+              generatedAspect={generatedAspect}
               imageProviders={imageProviders}
               imageProvider={imageProvider}
               onImageProviderChange={setImageProvider}
