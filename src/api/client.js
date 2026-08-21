@@ -95,6 +95,17 @@ export function getImageStyles() {
   return request('/api/image-styles')
 }
 
+// Drives the image-provider picker. Returns
+//   { providers: [{ id, label, description, available, unavailable_reason,
+//                   supports_reference, speed, chain?, usable_chain? }], default }
+// `available` is computed server-side from each backend's required env vars, so
+// an unconfigured provider can be disabled with a real reason instead of failing
+// on the first image. `supports_reference` is false for backends that cannot use
+// a saved character's reference image — those will not keep a character's look.
+export function getImageProviders() {
+  return request('/api/image-providers')
+}
+
 // Ask the LLM how many scene images would suit this script — purely advisory,
 // shown to the user BEFORE they commit to a count. `duration` (seconds, from
 // probeDuration()) is optional; the suggestion still works from script length
@@ -119,6 +130,7 @@ export function suggestImageCount({ text, duration }) {
 // multipart boundary itself for FormData bodies.
 export function generateScenes({
   text, duration, style, count, split, canvas, words = [], referenceFile = null, characterId = null,
+  imageProvider = null,
 }) {
   const form = new FormData()
   // `split`/`canvas` (Feature: Full-size image mode + 16:9 support) tell the
@@ -129,7 +141,12 @@ export function generateScenes({
   // of an LLM-guessed proportional split (see groq_provider.py).
   form.append(
     'payload',
-    JSON.stringify({ text, duration, style, count, split, canvas, words, character_id: characterId }),
+    // `image_provider`: which backend renders this batch (see
+    // getImageProviders()). null = the server's configured default.
+    JSON.stringify({
+      text, duration, style, count, split, canvas, words,
+      character_id: characterId, image_provider: imageProvider,
+    }),
   )
   if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
   return request('/api/scenes/generate', { method: 'POST', body: form })

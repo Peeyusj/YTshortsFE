@@ -7,6 +7,7 @@ import {
   getClips,
   getHealth,
   getImageStyles,
+  getImageProviders,
   getJobProject,
   getJobTimestamps,
   getMusic,
@@ -99,6 +100,10 @@ export default function App() {
   const [captionStyles, setCaptionStyles] = useState([])
   const [captionPositions, setCaptionPositions] = useState([])
   const [imageStyles, setImageStyles] = useState([]) // AI image styles
+  // Which backend renders the AI images (GET /api/image-providers).
+  // '' until loaded, then the server's default — usually the resilient chain.
+  const [imageProviders, setImageProviders] = useState([])
+  const [imageProvider, setImageProvider] = useState('')
   const [health, setHealth] = useState(null)
   const [loadError, setLoadError] = useState(null)
 
@@ -142,9 +147,10 @@ export default function App() {
       getCaptionStyles(),
       getCaptionPositions(),
       getImageStyles(),
+      getImageProviders(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, imageStyleData, healthData]) => {
+      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, imageStyleData, imageProviderData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -170,6 +176,9 @@ export default function App() {
           min: imageStyleData.min_count ?? 1,
           max: imageStyleData.max_count ?? 30,
         })
+        // Image backends + which one is preselected.
+        setImageProviders(imageProviderData.providers ?? [])
+        setImageProvider(imageProviderData.default ?? '')
         setHealth(healthData)
       })
       .catch((err) =>
@@ -619,6 +628,9 @@ export default function App() {
               characters={characters}
               characterId={imageCharacterId}
               onCharacterChange={setImageCharacterId}
+              imageProviders={imageProviders}
+              imageProvider={imageProvider}
+              onImageProviderChange={setImageProvider}
               disabled={isBusy}
               onImagesReady={handleGeneratedImages}
             />

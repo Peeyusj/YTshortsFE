@@ -37,11 +37,22 @@ export default function AutoImageGenerator({
   characters = [], // saved characters (GET /api/characters) — see CharacterLibrary.jsx
   characterId, // currently selected saved character id ('' = none)
   onCharacterChange,
+  imageProviders = [], // GET /api/image-providers — which backends render the images
+  imageProvider, // currently selected provider id ('' = server default)
+  onImageProviderChange,
   disabled, // true while a render job is running
   onImagesReady,
 }) {
   const { phase, job, error, isBusy, start, reset } = useSceneImages()
   const selectedStyle = styles.find((s) => s.id === style) ?? null
+  const selectedProvider = imageProviders.find((p) => p.id === imageProvider) ?? null
+
+  // The one combination worth warning about: a saved character is selected, but
+  // the chosen backend cannot accept its reference image. That silently produces
+  // a DIFFERENT-looking character in every scene, and the cause is impossible to
+  // guess from the output alone — so say it up front rather than after 40 images.
+  const referenceIgnored =
+    Boolean(characterId) && selectedProvider && selectedProvider.supports_reference === false
 
   // AI count suggestion: a SEPARATE, explicit step from the count field itself —
   // the user must see the number and press "Use N" before it overwrites their
@@ -117,6 +128,7 @@ export default function AutoImageGenerator({
       // in use, so in practice only one is ever set at a time.
       referenceFile: refImage?.file ?? null,
       characterId: characterId || null,
+      imageProvider: imageProvider || null,
     })
   }
 
@@ -148,6 +160,54 @@ export default function AutoImageGenerator({
 
       {enabled && (
         <div className="space-y-3">
+          {/* Image provider — WHICH backend renders these images. Unconfigured
+              backends are disabled with the reason inline, so a missing API key
+              is visible here instead of surfacing as a failed job later. */}
+          <div className="space-y-1.5">
+            <label htmlFor="image-provider" className="block text-xs font-medium text-slate-300">
+              Image provider
+            </label>
+            <select
+              id="image-provider"
+              value={imageProvider}
+              onChange={(e) => onImageProviderChange(e.target.value)}
+              disabled={disabled || isBusy || imageProviders.length === 0}
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 p-2 text-sm
+                         text-slate-100 focus:border-indigo-500 focus:outline-none
+                         focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+            >
+              {imageProviders.map((p) => (
+                <option key={p.id} value={p.id} disabled={!p.available}>
+                  {p.label}
+                  {p.speed && p.available ? ` — ${p.speed}` : ''}
+                  {p.available ? '' : ' (not configured)'}
+                </option>
+              ))}
+            </select>
+            {selectedProvider?.description && (
+              <p className="text-xs text-slate-500">{selectedProvider.description}</p>
+            )}
+            {/* "Auto" is a chain, so show what it will actually try, in order. */}
+            {selectedProvider?.usable_chain?.length > 0 && (
+              <p className="text-xs text-slate-500">
+                Order: {selectedProvider.usable_chain.join(' → ')}
+              </p>
+            )}
+            {selectedProvider && !selectedProvider.available && (
+              <p className="text-xs text-amber-400">
+                {selectedProvider.unavailable_reason}
+              </p>
+            )}
+            {referenceIgnored && (
+              <p className="text-xs text-amber-400">
+                This provider can’t use a character reference image, so “
+                {characters.find((c) => c.id === characterId)?.name ?? 'your character'}
+                ” will look different in every scene. Pick a provider that
+                supports references to keep them consistent.
+              </p>
+            )}
+          </div>
+
           {/* Style */}
           <div className="space-y-1.5">
             <label htmlFor="image-style" className="block text-xs font-medium text-slate-300">
