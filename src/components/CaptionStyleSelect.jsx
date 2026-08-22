@@ -4,24 +4,13 @@
 // generating (the backend renders the real thing via libass/.ass — this is
 // just a close-enough approximation using CSS text-stroke for the outline).
 
-// Reverses the .ass &HAABBGGRR colour format to a CSS #RRGGBB string. Display
-// only — the backend keeps consuming the &H.. format natively.
-function assColorToCss(assHex) {
-  if (!assHex) return null
-  const hex = assHex.replace(/^&H/i, '').replace(/&$/, '')
-  if (hex.length < 6) return null
-  const bb = hex.slice(-6, -4)
-  const gg = hex.slice(-4, -2)
-  const rr = hex.slice(-2)
-  return `#${rr}${gg}${bb}`
-}
+import { captionColors } from '../lib/ass'
 
 export default function CaptionStyleSelect({ styles, value, onChange, background, disabled }) {
   const selected = styles.find((s) => s.id === value) ?? null
-  const previewColor =
-    (selected && assColorToCss(selected.primary)) ?? (background === 'white' ? '#000000' : '#ffffff')
-  const previewOutline =
-    (selected && assColorToCss(selected.outline)) ?? (background === 'white' ? '#ffffff' : '#000000')
+  // Shared with StylePreview so the small swatch here and the moving preview
+  // below it can never disagree about what a preset looks like.
+  const { fill: previewColor, outline: previewOutline } = captionColors(selected, background)
 
   return (
     <div className="space-y-2">

@@ -87,6 +87,24 @@ export function voiceSampleUrl(voiceId) {
   return `${API_BASE}/api/voices/${voiceId}/sample`
 }
 
+// Drives the word-pop caption controls. Returns
+//   { animations: [{ id, label, description }], default,
+//     highlights: [{ id, label, ass, css }], default_highlight,
+//     densities:  [{ id, label, min_words, max_words, description }], default_density }
+// Every registry includes the entry that reproduces the original whole-line
+// captions ("off" / "full"), so the picker can always get back to it.
+export function getCaptionAnimations() {
+  return request('/api/caption-animations')
+}
+
+// Drives the scene-image motion controls. Returns
+//   { transitions: [{ id, label, description }], default_transition,
+//     default_seconds, min_seconds, max_seconds,
+//     ken_burns: [{ id, label, zoom }], default_ken_burns }
+export function getMotionOptions() {
+  return request('/api/motion')
+}
+
 // --- AI scene images (optional feature) ------------------------------------
 // Drives the image-style selector + count control. Returns
 //   { styles: [{ id, label, prompt_suffix, description }], default,
@@ -249,6 +267,13 @@ export function createJob({
   captionStyle,
   captionPosition,
   captionsEnabled = true,
+  captionAnimation,
+  captionHighlight,
+  captionDensity,
+  imageTransition,
+  transitionSeconds,
+  kenBurns,
+  seed = null,
   introVideo = null,
   outroVideo = null,
   files = [],
@@ -286,6 +311,18 @@ export function createJob({
       // Subtitle on/off toggle. Off skips the captions pipeline stage entirely
       // on the backend, not just the burn-in.
       captions_enabled: captionsEnabled,
+      // Motion & caption animation. All optional server-side with registry
+      // defaults, so omitting any of them is safe.
+      caption_animation: captionAnimation,
+      caption_highlight: captionHighlight,
+      caption_density: captionDensity,
+      image_transition: imageTransition,
+      transition_seconds: transitionSeconds,
+      ken_burns: kenBurns,
+      // Gameplay-trim seed. null means "derive a stable one from the settings";
+      // a restored project sends back the seed it was rendered with, so
+      // re-rendering it reproduces the same trim instead of re-rolling.
+      seed,
       // Intro/outro video wrap filenames (the clip files ride in `files` below,
       // keyed by these same names). null = not used.
       intro_video: introVideo,

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getCanvases,
+  getCaptionAnimations,
   getCaptionPositions,
   getCaptionStyles,
+  getMotionOptions,
   getCharacters,
   getClips,
   getHealth,
@@ -31,6 +33,9 @@ import SplitSelect from './components/SplitSelect'
 import CanvasSelect from './components/CanvasSelect'
 import MusicSelect from './components/MusicSelect'
 import CaptionStyleSelect from './components/CaptionStyleSelect'
+import CaptionAnimationSelect from './components/CaptionAnimationSelect'
+import ImageMotionSelect from './components/ImageMotionSelect'
+import StylePreview from './components/StylePreview'
 import CaptionPositionSelect from './components/CaptionPositionSelect'
 import CaptionsToggle from './components/CaptionsToggle'
 import CharacterLibrary from './components/CharacterLibrary'
@@ -44,6 +49,10 @@ import RecentProjects from './components/RecentProjects'
 
 const round2 = (v) => +v.toFixed(2)
 const clamp01 = (v, max) => Math.min(max, Math.max(0, v))
+
+// Mirrors backend config.KEN_BURNS_CYCLE. Kept in the same order so the preview,
+// the timeline and the render all agree on which image moves which way.
+const KB_CYCLE = ['zoom-in', 'pan-in', 'zoom-out', 'pan-out']
 
 export default function App() {
   // --- form state ---
@@ -60,13 +69,23 @@ export default function App() {
   const [captionStyle, setCaptionStyle] = useState('') // caption font/colour preset id
   const [captionPosition, setCaptionPosition] = useState('') // caption top/center/bottom placement id
   const [captionsEnabled, setCaptionsEnabled] = useState(true) // subtitle burn-in, on by default
+  // Word-pop captions + scene motion. Ids only; the registries below describe them.
+  const [captionAnimation, setCaptionAnimation] = useState('pop')
+  const [captionHighlight, setCaptionHighlight] = useState('amber')
+  const [captionDensity, setCaptionDensity] = useState('compact')
+  const [imageTransition, setImageTransition] = useState('crossfade')
+  const [transitionSeconds, setTransitionSeconds] = useState(0.45)
+  const [kenBurns, setKenBurns] = useState('medium')
+  // The gameplay-trim seed a restored project was rendered with. null = derive a
+  // stable one server-side; a restored value reproduces that project's exact trim.
+  const [seed, setSeed] = useState(null)
   const [placements, setPlacements] = useState([]) // Feature #3: sticker placements
   const [uploads, setUploads] = useState([]) // Feature #3: uploaded images (session only)
   // AI scene images (optional): the toggle + style/count controls, and the images
   // the backend generated. Generated images live SEPARATELY from `uploads` because
   // they aren't File objects (nothing to upload) — they're server-side PNGs the
   // render references as "generated:<id>/<file>". Each is { key, label, url }.
-  const [autoImageOn, setAutoImageOn] = useState(false)
+  const [autoImageOn, setAutoImageOn] = useState(true)
   const [imageStyle, setImageStyle] = useState('')
   const [imageCount, setImageCount] = useState(5)
   const [imageCountBounds, setImageCountBounds] = useState({ min: 1, max: 30 })
@@ -99,6 +118,12 @@ export default function App() {
   const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
   const [captionStyles, setCaptionStyles] = useState([])
   const [captionPositions, setCaptionPositions] = useState([])
+  const [captionAnimations, setCaptionAnimations] = useState([])
+  const [captionHighlights, setCaptionHighlights] = useState([])
+  const [captionDensities, setCaptionDensities] = useState([])
+  const [imageTransitions, setImageTransitions] = useState([])
+  const [kenBurnsLevels, setKenBurnsLevels] = useState([])
+  const [transitionBounds, setTransitionBounds] = useState({ min: 0.1, max: 1.5 })
   const [imageStyles, setImageStyles] = useState([]) // AI image styles
   // Which backend renders the AI images (GET /api/image-providers).
   // '' until loaded, then the server's default — usually the resilient chain.
@@ -148,11 +173,13 @@ export default function App() {
       getSounds(),
       getCaptionStyles(),
       getCaptionPositions(),
+      getCaptionAnimations(),
+      getMotionOptions(),
       getImageStyles(),
       getImageProviders(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, imageStyleData, imageProviderData, healthData]) => {
+      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, captionAnimationData, motionData, imageStyleData, imageProviderData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -170,6 +197,23 @@ export default function App() {
         setCaptionStyle(captionStyleData.default ?? '')
         setCaptionPositions(captionPositionData.positions ?? [])
         setCaptionPosition(captionPositionData.default ?? '')
+        // Word-pop captions: modes, highlight colours, and line density.
+        setCaptionAnimations(captionAnimationData.animations ?? [])
+        setCaptionAnimation(captionAnimationData.default ?? 'off')
+        setCaptionHighlights(captionAnimationData.highlights ?? [])
+        setCaptionHighlight(captionAnimationData.default_highlight ?? 'amber')
+        setCaptionDensities(captionAnimationData.densities ?? [])
+        setCaptionDensity(captionAnimationData.default_density ?? 'compact')
+        // Scene-image motion: handover style/length and Ken Burns strength.
+        setImageTransitions(motionData.transitions ?? [])
+        setImageTransition(motionData.default_transition ?? 'none')
+        setTransitionSeconds(motionData.default_seconds ?? 0.45)
+        setTransitionBounds({
+          min: motionData.min_seconds ?? 0.1,
+          max: motionData.max_seconds ?? 1.5,
+        })
+        setKenBurnsLevels(motionData.ken_burns ?? [])
+        setKenBurns(motionData.default_ken_burns ?? 'subtle')
         // AI image styles + count bounds (feature is off by default via the toggle).
         setImageStyles(imageStyleData.styles ?? [])
         setImageStyle(imageStyleData.default ?? '')
@@ -317,6 +361,20 @@ export default function App() {
     if (project.caption_style) setCaptionStyle(project.caption_style)
     if (project.caption_position) setCaptionPosition(project.caption_position)
     setCaptionsEnabled(project.captions_enabled)
+    // Motion & caption animation. A project.json written before these existed
+    // has no such keys; the backend fills today's defaults into ProjectOut, so
+    // these are always present and an older project simply reopens with them.
+    if (project.caption_animation) setCaptionAnimation(project.caption_animation)
+    if (project.caption_highlight) setCaptionHighlight(project.caption_highlight)
+    if (project.caption_density) setCaptionDensity(project.caption_density)
+    if (project.image_transition) setImageTransition(project.image_transition)
+    if (typeof project.transition_seconds === 'number') {
+      setTransitionSeconds(project.transition_seconds)
+    }
+    if (project.ken_burns) setKenBurns(project.ken_burns)
+    // null for pre-seed projects — those were rendered with a random trim that
+    // was never recorded, so re-rendering picks a fresh stable one instead.
+    setSeed(typeof project.seed === 'number' ? project.seed : null)
     setShowOutro(project.show_outro)
 
     referenceDurationRef.current = timestamps.duration ?? null
@@ -405,24 +463,62 @@ export default function App() {
     setGeneratedAspect({ canvas, split })
     setPlacements((prev) => {
       const manual = prev.filter((p) => !String(p.image).startsWith('generated:'))
-      const auto = images.map((img) => ({
+      const auto = images.map((img, i) => ({
         id: `gen-${img.key}`,
         image: img.key, // "generated:<sceneJobId>/<file>" — backend resolves it
         start: img.start,
         end: img.end,
         x: 'center',
         y: 'upper',
-        // AI scene images fill the top region and get a gentle Ken Burns zoom by
+        // AI scene images fill the top region and get a Ken Burns move by
         // default, so a still generated image looks "alive" without extra setup.
-        // The user can switch the effect (or off) per image in the timeline.
+        // The effect CYCLES by index rather than being 'zoom-in' every time:
+        // identical motion on every image is a large part of why a run of them
+        // reads as generated even when each one looks fine alone. Still fully
+        // overridable per image in the timeline.
         full_width: true,
-        animation: 'zoom-in',
+        animation: KB_CYCLE[i % KB_CYCLE.length],
         animation_duration: 0.4,
         sound_id: 'whoosh_soft',
       }))
       return [...manual, ...auto]
     })
   }
+
+  // --- Derived values the live preview needs ------------------------------
+  // Each resolves an id to the registry entry the backend would resolve it to,
+  // so the preview is driven by the SAME numbers the render will use rather than
+  // by a second set of hardcoded constants.
+  const selectedCaptionStyle = useMemo(
+    () => captionStyles.find((c) => c.id === captionStyle) ?? null,
+    [captionStyles, captionStyle],
+  )
+  const selectedHighlightCss = useMemo(
+    () => captionHighlights.find((h) => h.id === captionHighlight)?.css ?? '#F2A33C',
+    [captionHighlights, captionHighlight],
+  )
+  const selectedDensity = useMemo(
+    () => captionDensities.find((d) => d.id === captionDensity) ?? null,
+    [captionDensities, captionDensity],
+  )
+  const selectedKenBurnsZoom = useMemo(
+    () => kenBurnsLevels.find((k) => k.id === kenBurns)?.zoom ?? 1,
+    [kenBurnsLevels, kenBurns],
+  )
+  const selectedCaptionYFraction = useMemo(
+    () => captionPositions.find((p) => p.id === captionPosition)?.y_fraction ?? 0.5,
+    [captionPositions, captionPosition],
+  )
+  // How much of the frame the caption/image region gets. Landscape always renders
+  // full-screen server-side regardless of the split, so the preview must too or
+  // it would promise a gameplay strip the render won't draw.
+  const previewTopFraction = useMemo(() => {
+    if (canvas === 'landscape') return 1
+    const entry = splits.find((sp) => sp.id === split)
+    if (!entry) return 1280 / 1920
+    const total = entry.top + entry.bottom
+    return total > 0 ? entry.top / total : 1
+  }, [splits, split, canvas])
 
   // What the timeline shows as placeable/previewable images: user uploads PLUS
   // generated images PLUS images reused from a past render (in the same
@@ -492,6 +588,16 @@ export default function App() {
       captionStyle,
       captionPosition,
       captionsEnabled,
+      captionAnimation,
+      captionHighlight,
+      captionDensity,
+      imageTransition,
+      transitionSeconds,
+      kenBurns,
+      // null on a fresh job -> the backend derives a stable seed from the
+      // settings. A restored project sends back the seed it rendered with, so a
+      // re-render reproduces the identical gameplay trim.
+      seed,
       introVideo: introVideo?.key ?? null,
       outroVideo: outroVideo?.key ?? null,
       files,
@@ -609,6 +715,47 @@ export default function App() {
               value={captionsEnabled}
               onChange={setCaptionsEnabled}
               disabled={isBusy}
+            />
+            <CaptionAnimationSelect
+              animations={captionAnimations}
+              highlights={captionHighlights}
+              densities={captionDensities}
+              animation={captionAnimation}
+              highlight={captionHighlight}
+              density={captionDensity}
+              onAnimationChange={setCaptionAnimation}
+              onHighlightChange={setCaptionHighlight}
+              onDensityChange={setCaptionDensity}
+              disabled={isBusy || !captionsEnabled}
+            />
+            <ImageMotionSelect
+              transitions={imageTransitions}
+              kenBurnsLevels={kenBurnsLevels}
+              transition={imageTransition}
+              transitionSeconds={transitionSeconds}
+              kenBurns={kenBurns}
+              bounds={transitionBounds}
+              onTransitionChange={setImageTransition}
+              onSecondsChange={setTransitionSeconds}
+              onKenBurnsChange={setKenBurns}
+              disabled={isBusy}
+            />
+            {/* Live preview of everything chosen above, so the look can be
+                settled before paying for a render. */}
+            <StylePreview
+              captionStyle={selectedCaptionStyle}
+              captionAnimation={captionAnimation}
+              captionHighlightCss={selectedHighlightCss}
+              captionDensity={selectedDensity}
+              captionsEnabled={captionsEnabled}
+              captionYFraction={selectedCaptionYFraction}
+              background={background}
+              transition={imageTransition}
+              transitionSeconds={transitionSeconds}
+              kenBurnsZoom={selectedKenBurnsZoom}
+              images={generatedImages}
+              words={timelineWords}
+              topFraction={previewTopFraction}
             />
             <CharacterLibrary
               characters={characters}
