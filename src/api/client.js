@@ -43,6 +43,23 @@ export function getCanvases() {
   return request('/api/canvases')
 }
 
+// Drives the outro-card picker. Returns
+//   { outros: [{ id, label, path, canvas, description }],
+//     defaults: { <canvas id>: <outro id> }, seconds_choices, default_seconds,
+//     min_seconds, max_seconds }
+// Every card that exists on disk comes back at once (each tagged with the
+// canvas its artwork was made for), so switching aspect ratio just re-filters
+// the list client-side instead of re-fetching.
+export function getOutros() {
+  return request('/api/outros')
+}
+
+// Direct URL to an outro card's image, for the picker's thumbnail — same
+// pattern as characterImageUrl.
+export function outroImageUrl(outroId) {
+  return `${API_BASE}/api/outros/${outroId}/image`
+}
+
 // Drives the background-music dropdown. Returns
 //   { music: [{ id, label, path, artist, mood, description }], default, default_volume }
 // `default` is null (no music) and `default_volume` seeds the volume slider.
@@ -262,6 +279,8 @@ export function createJob({
   canvas,
   stickers,
   showOutro,
+  outro,
+  outroSeconds,
   music,
   musicVolume,
   captionStyle,
@@ -299,6 +318,10 @@ export function createJob({
       // sound_id alongside the original image/start/end/x/y — no transform needed.
       stickers,
       show_outro: showOutro,
+      // Which outro card to append (registry id from /api/outros; null = the
+      // canvas's default card) and how long it holds on screen.
+      outro: outro || null,
+      outro_seconds: outroSeconds,
       // Background-music registry id (null = no music) + how loud it sits under
       // the narration. The backend maps the id to a file and does the mix.
       music: music || null,

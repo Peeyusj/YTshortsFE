@@ -13,6 +13,7 @@ import {
   getJobProject,
   getJobTimestamps,
   getMusic,
+  getOutros,
   getSounds,
   getSplits,
   getVoices,
@@ -97,6 +98,11 @@ export default function App() {
   const [characters, setCharacters] = useState([])
   const [imageCharacterId, setImageCharacterId] = useState('')
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
+  // Which outro card and for how long (GET /api/outros). `outro` is a registry
+  // id; the effect below keeps it pointing at a card that fits the selected
+  // aspect ratio, since the 9:16 and 16:9 artwork aren't interchangeable.
+  const [outro, setOutro] = useState('')
+  const [outroSeconds, setOutroSeconds] = useState(2)
   // Intro/outro VIDEO wraps (session only): each is { key, name, file, url } or null.
   const [introVideo, setIntroVideo] = useState(null)
   const [outroVideo, setOutroVideo] = useState(null)
@@ -114,6 +120,9 @@ export default function App() {
   const [clips, setClips] = useState([])
   const [splits, setSplits] = useState([])
   const [canvases, setCanvases] = useState([])
+  const [outroCards, setOutroCards] = useState([]) // outro end cards
+  const [outroDefaults, setOutroDefaults] = useState({}) // canvas id -> card id
+  const [outroSecondsChoices, setOutroSecondsChoices] = useState([2, 3, 5])
   const [musicOptions, setMusicOptions] = useState([])
   const [soundOptions, setSoundOptions] = useState([]) // per-sticker sound effects
   const [captionStyles, setCaptionStyles] = useState([])
@@ -169,6 +178,7 @@ export default function App() {
       getClips(),
       getSplits(),
       getCanvases(),
+      getOutros(),
       getMusic(),
       getSounds(),
       getCaptionStyles(),
@@ -179,7 +189,7 @@ export default function App() {
       getImageProviders(),
       getHealth(),
     ])
-      .then(([voiceData, clipData, splitData, canvasData, musicData, soundData, captionStyleData, captionPositionData, captionAnimationData, motionData, imageStyleData, imageProviderData, healthData]) => {
+      .then(([voiceData, clipData, splitData, canvasData, outroData, musicData, soundData, captionStyleData, captionPositionData, captionAnimationData, motionData, imageStyleData, imageProviderData, healthData]) => {
         setVoices(voiceData.voices)
         setVoice(voiceData.default)
         setClips(clipData.clips)
@@ -188,6 +198,13 @@ export default function App() {
         setSplit(splitData.default)
         setCanvases(canvasData.canvases)
         setCanvas(canvasData.default)
+        // Outro cards: keep the whole list (each tagged with its canvas) and
+        // start on the default card for the default aspect ratio.
+        setOutroCards(outroData.outros ?? [])
+        setOutroDefaults(outroData.defaults ?? {})
+        setOutro(outroData.defaults?.[canvasData.default] ?? '')
+        setOutroSecondsChoices(outroData.seconds_choices ?? [2, 3, 5])
+        setOutroSeconds(outroData.default_seconds ?? 2)
         setMusicOptions(musicData.music)
         // default is null (no music) -> '' keeps the "None" option selected.
         setMusic(musicData.default ?? '')
@@ -247,6 +264,23 @@ export default function App() {
   useEffect(() => {
     refreshCharacters()
   }, [refreshCharacters])
+
+  // Switching aspect ratio invalidates a card built for the other one (a 9:16
+  // end card would sit pillarboxed in a 16:9 frame), so drop to that canvas's
+  // default whenever the current pick no longer fits. A pick that DOES fit is
+  // left alone — including one just restored from a past project.
+  useEffect(() => {
+    if (!canvas || outroCards.length === 0) return
+    const fits = outroCards.some(
+      (c) => c.id === outro && (c.canvas === canvas || c.canvas === 'any'),
+    )
+    if (fits) return
+    const fallback =
+      outroDefaults[canvas] ??
+      outroCards.find((c) => c.canvas === canvas || c.canvas === 'any')?.id ??
+      ''
+    setOutro(fallback)
+  }, [canvas, outro, outroCards, outroDefaults])
 
   // The selected voice's registry entry. Its `engine` decides whether the Parler
   // style-prompt box is shown; `default_description` is the placeholder for it.
@@ -376,6 +410,10 @@ export default function App() {
     // was never recorded, so re-rendering picks a fresh stable one instead.
     setSeed(typeof project.seed === 'number' ? project.seed : null)
     setShowOutro(project.show_outro)
+    // null on a project rendered before the outro picker existed — those fall
+    // back to the canvas default via the effect above.
+    if (project.outro) setOutro(project.outro)
+    if (typeof project.outro_seconds === 'number') setOutroSeconds(project.outro_seconds)
 
     referenceDurationRef.current = timestamps.duration ?? null
     prevTextRef.current = project.text
@@ -583,6 +621,8 @@ export default function App() {
       canvas,
       stickers,
       showOutro,
+      outro,
+      outroSeconds,
       music,
       musicVolume,
       captionStyle,
@@ -800,6 +840,13 @@ export default function App() {
             <OutroToggle
               value={showOutro}
               onChange={setShowOutro}
+              outros={outroCards}
+              canvas={canvas}
+              outro={outro}
+              onOutroChange={setOutro}
+              seconds={outroSeconds}
+              onSecondsChange={setOutroSeconds}
+              secondsChoices={outroSecondsChoices}
               disabled={isBusy}
               available={health?.outro}
             />
