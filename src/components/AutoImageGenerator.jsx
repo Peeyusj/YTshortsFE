@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import { sceneImageUrl, suggestImageCount } from '../api/client'
 import { useSceneImages } from '../hooks/useSceneImages'
 import CharacterSelect from './CharacterSelect'
+import WorldSelect from './WorldSelect'
 
 export default function AutoImageGenerator({
   enabled,
@@ -37,6 +38,9 @@ export default function AutoImageGenerator({
   characters = [], // saved characters (GET /api/characters) — see CharacterLibrary.jsx
   characterId, // currently selected saved character id ('' = none)
   onCharacterChange,
+  worlds = [], // saved worlds (GET /api/worlds) — see WorldLibrary.jsx
+  worldId, // currently selected saved world id ('' = none)
+  onWorldChange,
   generatedAspect = null, // { canvas, split } the existing images were generated for
   imageProviders = [], // GET /api/image-providers — which backends render the images
   imageProvider, // currently selected provider id ('' = server default)
@@ -137,6 +141,7 @@ export default function AutoImageGenerator({
       // in use, so in practice only one is ever set at a time.
       referenceFile: refImage?.file ?? null,
       characterId: characterId || null,
+      worldId: worldId || null,
       imageProvider: imageProvider || null,
     })
   }
@@ -253,6 +258,12 @@ export default function AutoImageGenerator({
             {selectedStyle?.description && (
               <p className="text-xs text-slate-500">{selectedStyle.description}</p>
             )}
+            {worldId && (
+              <p className="text-xs text-amber-400">
+                A world is selected below — its own visual style overrides
+                this style for this batch.
+              </p>
+            )}
           </div>
 
           {/* Count */}
@@ -332,6 +343,18 @@ export default function AutoImageGenerator({
             characters={characters}
             value={characterId}
             onChange={onCharacterChange}
+            disabled={disabled || isBusy}
+          />
+
+          {/* Saved world (persistent — see WorldLibrary.jsx). When selected,
+              its style_suffix overrides the Image style picker above for this
+              batch, and its setting_description grounds the LLM's scenes in
+              this franchise's iconic locations/props. Orthogonal to the
+              character above — both may be set together. */}
+          <WorldSelect
+            worlds={worlds}
+            value={worldId}
+            onChange={onWorldChange}
             disabled={disabled || isBusy}
           />
 

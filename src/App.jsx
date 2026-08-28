@@ -6,6 +6,7 @@ import {
   getCaptionStyles,
   getMotionOptions,
   getCharacters,
+  getWorlds,
   getClips,
   getHealth,
   getImageStyles,
@@ -40,6 +41,7 @@ import StylePreview from './components/StylePreview'
 import CaptionPositionSelect from './components/CaptionPositionSelect'
 import CaptionsToggle from './components/CaptionsToggle'
 import CharacterLibrary from './components/CharacterLibrary'
+import WorldLibrary from './components/WorldLibrary'
 import AutoImageGenerator from './components/AutoImageGenerator'
 import StickerTimeline from './components/StickerTimeline'
 import IntroOutroVideo from './components/IntroOutroVideo'
@@ -97,6 +99,12 @@ export default function App() {
   // CharacterSelect); '' = none, fall back to a one-off reference upload.
   const [characters, setCharacters] = useState([])
   const [imageCharacterId, setImageCharacterId] = useState('')
+  // Persistent world library (backend/worlds.py): saved once, reused across
+  // any future AI scene-image batch. `imageWorldId` is the one currently
+  // selected for the NEXT generation (see AutoImageGenerator's WorldSelect);
+  // '' = none. Orthogonal to imageCharacterId — both may be set together.
+  const [worlds, setWorlds] = useState([])
+  const [imageWorldId, setImageWorldId] = useState('')
   const [showOutro, setShowOutro] = useState(true) // outro card, on by default
   // Which outro card and for how long (GET /api/outros). `outro` is a registry
   // id; the effect below keeps it pointing at a card that fits the selected
@@ -264,6 +272,18 @@ export default function App() {
   useEffect(() => {
     refreshCharacters()
   }, [refreshCharacters])
+
+  // Persistent world library — same shape as refreshCharacters above, loaded
+  // and re-callable independently so WorldLibrary's create/delete can refresh
+  // just this list.
+  const refreshWorlds = useCallback(() => {
+    return getWorlds()
+      .then((data) => setWorlds(data.worlds ?? []))
+      .catch(() => {}) // best-effort — the panel/select just show an empty list
+  }, [])
+  useEffect(() => {
+    refreshWorlds()
+  }, [refreshWorlds])
 
   // Switching aspect ratio invalidates a card built for the other one (a 9:16
   // end card would sit pillarboxed in a 16:9 frame), so drop to that canvas's
@@ -803,6 +823,11 @@ export default function App() {
               disabled={isBusy}
               onChanged={refreshCharacters}
             />
+            <WorldLibrary
+              worlds={worlds}
+              disabled={isBusy}
+              onChanged={refreshWorlds}
+            />
             <AutoImageGenerator
               enabled={autoImageOn}
               onToggle={setAutoImageOn}
@@ -821,6 +846,9 @@ export default function App() {
               characters={characters}
               characterId={imageCharacterId}
               onCharacterChange={setImageCharacterId}
+              worlds={worlds}
+              worldId={imageWorldId}
+              onWorldChange={setImageWorldId}
               generatedAspect={generatedAspect}
               imageProviders={imageProviders}
               imageProvider={imageProvider}

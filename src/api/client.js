@@ -165,7 +165,7 @@ export function suggestImageCount({ text, duration }) {
 // multipart boundary itself for FormData bodies.
 export function generateScenes({
   text, duration, style, count, split, canvas, words = [], referenceFile = null, characterId = null,
-  imageProvider = null,
+  worldId = null, imageProvider = null,
 }) {
   const form = new FormData()
   // `split`/`canvas` (Feature: Full-size image mode + 16:9 support) tell the
@@ -174,13 +174,16 @@ export function generateScenes({
   // `words`: real per-word timestamps from /api/probe — lets the backend anchor
   // each generated image to the moment its content is actually spoken instead
   // of an LLM-guessed proportional split (see groq_provider.py).
+  // `world_id`: an optional saved world (see getWorlds() below) — orthogonal
+  // to character_id, grounds this batch's scenes + visual style in a
+  // franchise setting (Naruto, Attack on Titan, ...).
   form.append(
     'payload',
     // `image_provider`: which backend renders this batch (see
     // getImageProviders()). null = the server's configured default.
     JSON.stringify({
       text, duration, style, count, split, canvas, words,
-      character_id: characterId, image_provider: imageProvider,
+      character_id: characterId, world_id: worldId, image_provider: imageProvider,
     }),
   )
   if (referenceFile) form.append('reference', referenceFile, referenceFile.name)
@@ -235,6 +238,36 @@ export function deleteCharacter(id) {
 // Absolute URL to a saved character's master reference PNG.
 export function characterImageUrl(id) {
   return `${API_BASE}/api/characters/${id}/image`
+}
+
+// --- Persistent world library -----------------------------------------------
+// Save a franchise/setting's visual style + iconic-location text ONCE and
+// reuse it across any future AI scene-image generation via
+// generateScenes({ worldId }). Orthogonal to characters: a character is WHO
+// is on screen, a world is WHERE/what it looks like — both may be set
+// together.
+
+// Drives the world picker. Returns
+//   { worlds: [{ id, name, style_suffix, setting_description, source, created_at }] }
+export function getWorlds() {
+  return request('/api/worlds')
+}
+
+// Save a new world. Plain JSON body — unlike createCharacter(), there's no
+// file to upload/generate, so no multipart/FormData is needed. Returns the
+// saved WorldOut.
+export function createWorld({ name, styleSuffix, settingDescription }) {
+  return request('/api/worlds', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name, style_suffix: styleSuffix, setting_description: settingDescription,
+    }),
+  })
+}
+
+export function deleteWorld(id) {
+  return request(`/api/worlds/${id}`, { method: 'DELETE' })
 }
 
 // Run ONLY the voice stage to measure the real narration, so the Canva-like
