@@ -3,6 +3,8 @@
 **What this covers:** `src/components/StickerTimeline.jsx` (grew substantially — now also handles sound effects, slide-in animations, full-width mode, AI-generated images, and a live 9:16 preview panel) — the most complex UI in the project, explained so a beginner React dev could rebuild it. **Read first:** [FRONTEND.md](FRONTEND.md); the backend side of stickers is in [../../YTshortsAnimation/docs/04-PIPELINE.md](../../YTshortsAnimation/docs/04-PIPELINE.md) §4 and [../../YTshortsAnimation/docs/07-DATA-FLOW.md](../../YTshortsAnimation/docs/07-DATA-FLOW.md).
 
 > **Update:** every core mechanic described below (drag machines, waveform, coordinate system) is unchanged from the original design. Phase 3/4: each block can carry an attached sound effect, a slide-in animation, and a "full width" flag; the component renders a live preview of the current playhead position; the `uploads` prop transparently contains both local File uploads AND AI-generated scene images (the component itself doesn't distinguish them — see [12-AI-IMAGE-GENERATION.md](../../YTshortsAnimation/docs/12-AI-IMAGE-GENERATION.md)). **Phase 5 update:** full-width blocks can now use **Ken Burns motion** (zoom-in/zoom-out/pan-in/pan-out) instead of a slide-in, plus a cover/contain fit toggle, plus a dedicated motion-preview mini-player. A prerequisite bug fix also changed how the live preview panel fits full-width images (`objectFit: cover` instead of `contain`) to actually match the real render.
+>
+> **Latest pass:** two small but real changes, both driven by the new "recent projects" feature elsewhere in the app (see [FRONTEND.md](FRONTEND.md)). (1) The `probeId` prop was replaced by `audioSrc` — a resolved URL string, so this component can play back either a live probe or a reopened past project's narration without knowing which. (2) The `uploads` prop's merge now also includes `restoredImages` (images reused from a reopened project) alongside local uploads and AI-generated images — still one uniform `{key,label,url}` list from this component's point of view. Auto-placed AI images now also default to `sound_id: 'whoosh_soft'` instead of `null` (set in `App.jsx`'s `handleGeneratedImages`, not inside this component).
 
 ---
 
@@ -46,10 +48,10 @@ The component holds **no placement data of its own**:
 |---|---|
 | `duration` | `timelineDuration` — real seconds from `/api/probe`; `null` = locked |
 | `words` | `timelineWords` — `[{word,start,end}]` |
-| `probeId` | `probeId` — handle for `GET /api/probe/{id}/audio` |
+| `audioSrc` (⚠️ **renamed from `probeId` this pass**) | `App.jsx` now resolves this itself: `probeId ? probeAudioUrl(probeId) : restoredAudioUrl` — a plain URL string, not an id. This lets the same prop serve either a live probe (`GET /api/probe/{id}/audio`) or a reopened past project's narration (`GET /api/jobs/{id}/audio`, see [../../YTshortsAnimation/docs/13-CHARACTERS-AND-PROJECTS.md](../../YTshortsAnimation/docs/13-CHARACTERS-AND-PROJECTS.md)), without this component needing to know which source it's playing. Every internal `[probeId]` effect dependency and the waveform fetch were updated to key off `audioSrc` instead. |
 | `loading` | `probing` |
 | `onLoadTimeline` | `handleLoadTimeline` |
-| `uploads` | `timelineImages` (new — a `useMemo` merge of local `uploads` + `generatedImages`, both normalized to `{key,label,url}`; the component treats every entry uniformly regardless of source) |
+| `uploads` | `timelineImages` (a `useMemo` merge of local `uploads` + `generatedImages` + `restoredImages` (new — images reused from a reopened past project), all normalized to `{key,label,url}`; the component treats every entry uniformly regardless of source) |
 | `onAddFiles` / `onRemoveUpload` | handlers (the latter now branches on a `"generated:"` key prefix in `App.jsx`, not inside this component) |
 | `placements` | `placements` |
 | `onChange` | `setPlacements` |
@@ -74,7 +76,7 @@ Uploads (and now generated images) live in `App` so it can send the real `File` 
 
 **State** (changing these *should* re-paint): `selectedKey` (armed upload), `selectedId` (selected block), `draft` (`{start,end}` while drag-creating), `pps` (zoom), `peaks` (900-float waveform or null), `playing`, `cursor` (playhead seconds).
 
-**Derived:** `secToPx = s => s * pps` (the core mapping — the whole layout is `left: secToPx(start)`, `width: secToPx(end-start)` absolute positioning); `totalW = max(secToPx(duration), 320)`; `audioSrc = probeId ? probeAudioUrl(probeId) : null`.
+**Derived:** `secToPx = s => s * pps` (the core mapping — the whole layout is `left: secToPx(start)`, `width: secToPx(end-start)` absolute positioning); `totalW = max(secToPx(duration), 320)`. `audioSrc` is now a **prop** (see above), not derived locally from `probeId` — that resolution moved up to `App.jsx` this pass.
 
 ---
 
@@ -125,12 +127,12 @@ Each block has 1.5px-wide translucent handles at its left/right edges (`cursor-e
 
 ## Audio machinery
 
-**Playback:** a hidden `<audio ref={audioRef} src={audioSrc} preload="auto">` streams the probe mp3 (`GET /api/probe/{id}/audio`). `togglePlay` does `a.play().then(...).catch(() => setPlaying(false))` — the catch handles browser autoplay-policy rejections. Changing `probeId` resets `playing=false, cursor=0`.
+**Playback:** a hidden `<audio ref={audioRef} src={audioSrc} preload="auto">` streams whichever mp3 `audioSrc` resolves to (a live probe or a reopened past job's narration — see the props table above). `togglePlay` does `a.play().then(...).catch(() => setPlaying(false))` — the catch handles browser autoplay-policy rejections. Changing `audioSrc` resets `playing=false, cursor=0`.
 
 **Playhead animation:** a `requestAnimationFrame` loop runs **only while playing**, copying `audio.currentTime` into `cursor` ~60fps. Why not the native `timeupdate` event? It fires only ~4Hz — too coarse for a smooth sweeping playhead. The playhead is a `pointer-events-none` 1px rose line at `left: secToPx(cursor)`.
 
-**Waveform** (effect keyed on `[probeId, duration]`):
-1. `fetch(probeAudioUrl(probeId))` → `arrayBuffer()`. ⚠️ **The mp3 is downloaded twice total** — here for decoding, and again by the `<audio>` element for playback (no shared cache). ⚠️ `resp.ok` is never checked — a 404 returns JSON bytes that fail in `decodeAudioData`, caught → `setPeaks(null)` (graceful by accident).
+**Waveform** (effect keyed on `[audioSrc, duration]`, was `[probeId, duration]`):
+1. `fetch(audioSrc)` → `arrayBuffer()`. ⚠️ **The mp3 is downloaded twice total** — here for decoding, and again by the `<audio>` element for playback (no shared cache). ⚠️ `resp.ok` is never checked — a 404 returns JSON bytes that fail in `decodeAudioData`, caught → `setPeaks(null)` (graceful by accident).
 2. `new AudioContext()` → `decodeAudioData(buf)` → `ctx.close()` immediately (only needed for decoding).
 3. **Peak reduction:** channel 0 only, `block = floor(raw.length / 900)` samples per bucket, store the max absolute sample per bucket, normalize all by the global max (guarding silence with `|| 1`). Result: 900 floats in `[0,1]`.
 4. A `cancelled` flag prevents `setState` after the effect is superseded. Any decode error → `setPeaks(null)` (playback still works without the waveform).
